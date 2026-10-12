@@ -1,9 +1,11 @@
 const $=id=>document.getElementById(id);
-let messages=[],config,running=false,controller;
+let messages=[],config,running=false,controller,currentRoom='platform',rooms=[];
+const apiUrl=route=>route+(route.includes('?')?'&':'?')+'roomId='+encodeURIComponent(currentRoom);
+const api=(route,options)=>fetch(apiUrl(route),options);
 try{const saved=JSON.parse(localStorage.getItem('ideas-room')||'[]');if(Array.isArray(saved))messages=saved.filter(m=>m&&typeof m.text==='string'&&typeof m.speaker==='string');}catch{}
 function artifactLink(artifact){
   if(!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(artifact?.id||''))return;
-  $('artifact').href=`/api/artifacts/${artifact.id}`;$('artifact').download=`ideas-${artifact.id}.md`;$('artifact').hidden=false;
+  $('artifact').href=apiUrl(`/api/artifacts/${artifact.id}`);$('artifact').download=`ideas-${artifact.id}.md`;$('artifact').hidden=false;
 }
 try{artifactLink(JSON.parse(localStorage.getItem('ideas-artifact')||'null'));}catch{}
 let preferences={};
@@ -15,14 +17,25 @@ function savePreferences(){try{localStorage.setItem('ideas-settings',JSON.string
 
 const phases={plan:'작업 계획',draft:'파일 초안',review:'다른 AI 검토',final:'검토 반영 수정본'};
 const stage=m=>phases[m.phase]|| (m.round===3?'초안 검토':m.round===2?(m.workflow==='draft'?'작성자 초안':'상호 검토'):'독립 제안');
-function save(){try{localStorage.setItem('ideas-room',JSON.stringify(messages));}catch{$('status').textContent='브라우저 저장에 실패했습니다. 회의록을 내보내세요.';}}
+function save(){try{localStorage.setItem('ideas-room:'+currentRoom,JSON.stringify(messages));}catch{$('status').textContent='브라우저 저장에 실패했습니다. 회의록을 내보내세요.';}}
+function renderText(root,text){
+  let code=null;
+  for(const line of text.split('\n')){
+    if(line.startsWith('```')){if(code)code=null;else{code=document.createElement('pre');root.append(code);}continue;}
+    if(code){code.textContent+=line+'\n';continue;}if(!line.trim())continue;
+    const heading=/^#{1,3}\s+(.+)$/.exec(line);const paragraph=document.createElement(heading?'h3':'p');const value=heading?heading[1]:line;
+    const parts=value.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g);
+    for(const part of parts){if(part.startsWith('**')&&part.endsWith('**')){const strong=document.createElement('strong');strong.textContent=part.slice(2,-2);paragraph.append(strong);}else if(part.startsWith('`')&&part.endsWith('`')){const inline=document.createElement('code');inline.textContent=part.slice(1,-1);paragraph.append(inline);}else{const link=/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/.exec(part);if(link){const a=document.createElement('a');a.href=link[2];a.textContent=link[1];a.target='_blank';a.rel='noopener noreferrer';paragraph.append(a);}else paragraph.append(document.createTextNode(part));}}
+    root.append(paragraph);
+  }
+}
 function render(){
   $('log').querySelectorAll('.bubble').forEach(e=>e.remove());$('welcome').hidden=messages.length>0;
   for(const m of messages){
     const card=document.createElement('article');card.className='bubble'+(m.speaker==='사용자'?' user':'')+(m.error?' error':'');
     const meta=document.createElement('div');meta.className='meta';const speaker=document.createElement('strong');speaker.textContent=m.speaker;meta.append(speaker);
     const label=document.createElement('span');label.textContent=m.speaker==='사용자'?'방향 제시':`${m.mode==='demo'?'데모 · ':''}${stage(m)}${m.error?' · 실패':''}`;meta.append(label);card.append(meta);
-    const body=document.createElement('div');body.className='body';body.textContent=m.text;card.append(body);
+    const body=document.createElement('div');body.className='body';renderText(body,m.text);card.append(body);
     if(m.model){const usage=document.createElement('div');usage.className='usage';usage.textContent=m.model+(Number.isFinite(m.inputTokens)?` · 입력 ${m.inputTokens} / 출력 ${m.outputTokens??'미확인'} 토큰`:'')+(m.mode==='subscription'?' · 계정 사용량 한도 적용':m.costUSD!=null?` · 추정 $${m.costUSD.toFixed(5)}`:' · API 비용 미확인')+(m.truncated?' · 생성 한도 도달':'');card.append(usage);}
     if(m.webSearchEnabled){const research=document.createElement('div');research.className='usage';research.textContent=`검색 도구 호출 ${m.webSearchCount||0}회 · 페이지 확인 도구 호출 ${m.webFetchCount||0}회`+(!m.webSearchCount&&!m.webFetchCount?' · 이 답변에서는 도구 호출이 기록되지 않았습니다.':'');card.append(research);}
     if(Array.isArray(m.sources)&&m.sources.length){const sources=document.createElement('div');sources.className='sources';const title=document.createElement('span');title.textContent='답변의 출처 링크';sources.append(title);for(const href of m.sources.slice(0,12)){try{const url=new URL(href);if(url.protocol!=='https:'||url.username||url.password)continue;const link=document.createElement('a');link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';link.textContent=url.hostname+url.pathname;sources.append(link);}catch{}}card.append(sources);}
@@ -33,7 +46,7 @@ function render(){
   $('log').scrollTop=$('log').scrollHeight;
 }
 function searchState(){$('web-search').disabled=running||$('mode').value!=='subscription';$('search-hint').textContent=$('mode').value==='subscription'?'조사가 필요하면 검색합니다. 검색어는 외부 검색 서비스로 전송됩니다.':'웹 검색 연결은 현재 기존 구독 모드에서 사용할 수 있습니다.';}
-function state(active){running=active;for(const id of ['send','clear','mode','review','workflow','writer','refresh','refresh-results'])$(id).disabled=active;searchState();document.querySelectorAll('[name=participant],[name=file]').forEach(e=>e.disabled=active);$('stop').hidden=!active;}
+function state(active){running=active;for(const id of ['send','clear','mode','review','workflow','writer','refresh','refresh-results','home','save-project'])$(id).disabled=active;searchState();document.querySelectorAll('[name=participant],[name=file]').forEach(e=>e.disabled=active);$('stop').hidden=!active;}
 function selected(){return [...document.querySelectorAll('[name=participant]:checked')].map(e=>e.value);}
 function updateWriter(){
   const previous=$('writer').value||preferences.writer;$('writer').replaceChildren();
@@ -55,14 +68,14 @@ function showParticipants(preserve=false){
 }
 async function refresh(preserve=true){
   $('refresh').disabled=true;
-  try{const response=await fetch('/api/config');if(!response.ok)throw new Error('연결 상태를 읽지 못했습니다.');config=await response.json();showParticipants(preserve);$('project-name').textContent=`자료 폴더: ${config.projectName}`;
+  try{const response=await api('/api/config');if(!response.ok)throw new Error('연결 상태를 읽지 못했습니다.');config=await response.json();showParticipants(preserve);$('project-name').textContent=`자료 폴더: ${config.projectName}`;
     $('status').textContent=$('mode').value==='subscription'?`구독 연결 준비 ${config.local.filter(p=>p.ready).length}/3 · 로그인한 참가자를 선택해 시작하세요.`:'연결 상태를 갱신했습니다.';
   }catch(error){$('status').textContent=error.message;}finally{$('refresh').disabled=running;}
 }
 
 async function refreshResults(){
   try{
-    const response=await fetch('/api/deliverables');const data=await response.json();if(!response.ok)throw new Error(data.error);
+    const response=await api('/api/deliverables');const data=await response.json();if(!response.ok)throw new Error(data.error);
     $('deliverables').replaceChildren();
     if(!data.items.length){$('deliverables').textContent='아직 저장된 파일이 없습니다.';return;}
     for(const item of data.items){
@@ -73,10 +86,10 @@ async function refreshResults(){
         button.onclick=async()=>{
           button.disabled=true;
           try{
-            const url=`/api/deliverables/${item.id}/${version}/bundle`;const response=await fetch(url);if(!response.ok)throw new Error('파일을 읽지 못했습니다.');const bundle=await response.json();contents.replaceChildren();
+            const url=`/api/deliverables/${item.id}/${version}/bundle`;const response=await api(url);if(!response.ok)throw new Error('파일을 읽지 못했습니다.');const bundle=await response.json();contents.replaceChildren();
             const summary=document.createElement('p');summary.textContent=bundle.summary;contents.append(summary);
-            const all=document.createElement('a');all.href=url;all.textContent='전체 파일 묶음(JSON) 다운로드';all.className='result-link';contents.append(all);
-            for(const file of bundle.files){const detail=document.createElement('details');const name=document.createElement('summary');name.textContent=file.path;detail.append(name);const link=document.createElement('a');link.className='result-link';link.href=`/api/deliverables/${item.id}/${version}/file?path=${encodeURIComponent(file.path)}`;link.textContent='파일 다운로드';detail.append(link);const preview=document.createElement('pre');preview.textContent=file.content;detail.append(preview);contents.append(detail);}
+            const all=document.createElement('a');all.href=apiUrl(url);all.textContent='전체 파일 묶음(JSON) 다운로드';all.className='result-link';contents.append(all);
+            for(const file of bundle.files){const detail=document.createElement('details');const name=document.createElement('summary');name.textContent=file.path;detail.append(name);const link=document.createElement('a');link.className='result-link';link.href=apiUrl(`/api/deliverables/${item.id}/${version}/file?path=${encodeURIComponent(file.path)}`);link.textContent='파일 다운로드';detail.append(link);const preview=document.createElement('pre');preview.textContent=file.content;detail.append(preview);contents.append(detail);}
           }catch(error){contents.textContent=error.message;}finally{button.disabled=false;}
         };
       }
@@ -90,7 +103,7 @@ function onEvent(e,mode,workflow){
   if(e.type==='answer'||e.type==='error'){messages.push({...e,mode,workflow,error:e.type==='error'});save();render();}
   if(e.type==='notice')$('status').textContent=e.text;
   if(e.type==='deliverable'){refreshResults();}
-  if(e.type==='artifact'){artifactLink(e);try{localStorage.setItem('ideas-artifact',JSON.stringify({id:e.id}));}catch{}}
+  if(e.type==='artifact'){artifactLink(e);try{localStorage.setItem('ideas-artifact:'+currentRoom,JSON.stringify({id:e.id}));}catch{}}
   if(e.type==='done')$('status').textContent='회의가 끝났습니다. 결과물을 다운로드하거나 다음 방향을 입력하세요.';
 }
 $('composer').addEventListener('submit',async event=>{
@@ -108,7 +121,7 @@ $('composer').addEventListener('submit',async event=>{
   controller=new AbortController();state(true);$('status').textContent=mode==='subscription'?'구독 CLI를 호출합니다. 앱 화면을 조작하지 않습니다.':mode==='live'?'별도 과금 API 호출을 시작합니다.':'무료 데모를 시작합니다.';
   let failures=0,lastNotice='';$('artifact').hidden=true;
   try{
-    const response=await fetch('/api/meeting',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({history,participants:ids,mode,review:$('review').checked,workflow,writer:$('writer').value,files,webSearch:mode==='subscription'&&$('web-search').checked}),signal:controller.signal});
+    const response=await api('/api/meeting',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roomId:currentRoom,history,participants:ids,mode,review:$('review').checked,workflow,writer:$('writer').value,files,webSearch:mode==='subscription'&&$('web-search').checked}),signal:controller.signal});
     if(!response.ok){const data=await response.json();throw new Error(data.error);}
     messages.push({speaker:'사용자',text,mode,workflow});save();render();$('message').value='';
     const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',doneEvent=false;
@@ -125,21 +138,27 @@ $('workflow').onchange=()=>{if($('workflow').value==='files')$('review').checked
 for(const id of ['mode','workflow','writer','review','web-search'])$(id).addEventListener('change',savePreferences);
 $('mode').onchange=()=>{if(config)showParticipants();$('status').textContent=$('mode').value==='subscription'?'기존 계정으로 로그인한 CLI를 사용합니다. API 키를 사용하지 않습니다.':$('mode').value==='demo'?'무료 데모 · 실제 AI 답변을 생성하지 않습니다.':'API 모드 · 대화와 선택한 자료를 전송하고 별도 과금합니다.';};
 $('example').onclick=()=>{$('message').value='나와 AI 동료들이 일주일 동안 함께 시도할 생산적인 실험 3개를 제안해줘. 하루에 30분만 쓸 수 있어.';$('message').focus();};
-$('clear').onclick=()=>{if(messages.length&&!confirm('이 브라우저의 현재 회의를 지울까요? 필요한 기록은 먼저 내보내세요.'))return;messages=[];save();render();$('artifact').hidden=true;try{localStorage.removeItem('ideas-artifact');}catch{}$('status').textContent='새 회의를 시작하세요.';};
+$('clear').onclick=async()=>{if(messages.length&&!confirm('현재 대화를 새로 시작할까요? 이미 저장한 회의록과 결과 파일은 남습니다.'))return;try{const response=await api('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reset:true})});if(!response.ok)throw new Error((await response.json()).error);messages=[];save();render();$('artifact').hidden=true;localStorage.removeItem('ideas-artifact:'+currentRoom);$('status').textContent='새 대화를 시작하세요.';}catch(error){$('status').textContent=error.message;}};
 $('export').onclick=()=>{const markdown='# IDEAS 공동 회의록\n\n'+messages.map(m=>`## ${m.speaker} · ${m.mode==='demo'?'데모':m.speaker==='사용자'?'사용자':stage(m)}${m.error?' · 오류':''}\n\n${m.text}\n${m.model?'\n모델: '+m.model:''}`).join('\n\n');const url=URL.createObjectURL(new Blob([markdown],{type:'text/markdown;charset=utf-8'}));const link=document.createElement('a');link.href=url;link.download='ideas-meeting.md';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
 const localServer=['127.0.0.1','localhost','::1','[::1]'].includes(location.hostname)&&!document.querySelector('meta[name="ideas-hosting"][content="static"]');
-if(!localServer){
-  config=null;
-  $('status').textContent='웹 화면 배포 단계입니다. 원격 AI 서버 연결은 아직 준비되지 않았습니다.';
-  $('participants').textContent='맥 워커 연결 후 GPT·Claude를 사용할 수 있습니다.';
-  $('files').textContent='원격 서버 연결 후 자료를 선택할 수 있습니다.';
-  $('deliverables').textContent='이 배포에는 맥의 회의 기록이나 결과 파일이 포함되지 않습니다.';
-  $('cost').textContent='AI 서버 미연결 · 실제 호출 없음';
-  for(const id of ['send','refresh','refresh-results','mode','workflow','writer','review','web-search','example'])$(id).disabled=true;
-}else{
-await refresh(false);
-await refreshResults();
-try{const response=await fetch('/api/files');const data=await response.json();if(!response.ok)throw new Error(data.error);for(const name of data.files){const label=document.createElement('label');label.className='file';const input=document.createElement('input');input.type='checkbox';input.name='file';input.value=name;const text=document.createElement('span');text.textContent=name;label.append(input,text);$('files').append(label);}}catch(error){$('files').textContent=error.message;}
+async function loadFiles(){
+  $('files').replaceChildren();try{const response=await api('/api/files');const data=await response.json();if(!response.ok)throw new Error(data.error);for(const name of data.files){const label=document.createElement('label');label.className='file';const input=document.createElement('input');input.type='checkbox';input.name='file';input.value=name;const text=document.createElement('span');text.textContent=name;label.append(input,text);$('files').append(label);}}catch(error){$('files').textContent=error.message;}
 }
-render();
-if(!localServer)$('cost').textContent='AI 서버 미연결 · 실제 호출 없음';
+async function loadRooms(){
+  const response=await fetch('/api/rooms');if(!response.ok)throw new Error('회의실 목록을 읽지 못했습니다.');rooms=(await response.json()).items;$('room-grid').replaceChildren();
+  for(const room of rooms){const card=document.createElement('article');card.className='room-card';const kind=document.createElement('span');kind.className='room-kind';kind.textContent=room.kind==='platform'?'회의실 프로그램 개발':'프로젝트 작업 공간';const title=document.createElement('h2');title.textContent=room.name;const root=document.createElement('code');root.textContent=room.root;const status=document.createElement('p');status.textContent=room.git.branch?`${room.git.branch} · 변경 ${room.git.changes}개 · ${room.git.commit}`:'Git 상태 확인 필요';card.append(kind,title,root,status);if(room.repo){const repo=document.createElement('a');repo.href=room.repo;repo.target='_blank';repo.rel='noopener noreferrer';repo.textContent=room.repo.replace('https://github.com/','');card.append(repo);}const button=document.createElement('button');button.textContent='회의실 열기 →';button.onclick=()=>openRoom(room.id);card.append(button);$('room-grid').append(card);}
+  $('dashboard-status').textContent=`연결된 회의실 ${rooms.length}개 · 방마다 자료·대화·결과가 분리됩니다.`;$('worker-state').textContent='로컬 맥 워커 연결됨';
+}
+async function openRoom(id){
+  if(running)return;currentRoom=id;config=null;$('dashboard').hidden=true;$('room-view').hidden=false;$('artifact').hidden=true;$('message').value='';location.hash='room='+id;
+  const room=rooms.find(r=>r.id===id);$('room-title').textContent=room.name;$('active-room-name').textContent=room.name;$('active-room-path').textContent=room.root;$('git-state').textContent=room.git.branch?`${room.git.branch} · 변경 ${room.git.changes}개`:'Git 상태 확인 필요';
+  try{const response=await api('/api/session');if(!response.ok)throw new Error();messages=(await response.json()).messages;if(!messages.length){const key=id==='platform'?'ideas-room':'ideas-room:'+id;try{messages=JSON.parse(localStorage.getItem(key)||'[]');}catch{messages=[];}}}catch{messages=[];$('status').textContent='저장된 대화를 읽지 못했습니다.';}
+  try{artifactLink(JSON.parse(localStorage.getItem('ideas-artifact:'+id)||(id==='platform'?localStorage.getItem('ideas-artifact'):'null')||'null'));}catch{}
+  render();await refresh(false);await Promise.all([refreshResults(),loadFiles()]);
+}
+$('home').onclick=async()=>{if(running)return;$('room-view').hidden=true;$('dashboard').hidden=false;history.replaceState(null,'',location.pathname);try{await loadRooms();}catch(error){$('dashboard-status').textContent=error.message;}};
+$('new-room').onclick=()=>{$('room-form').hidden=false;$('room-name').focus();};$('cancel-room').onclick=()=>{$('room-form').hidden=true;};
+$('room-form').onsubmit=async event=>{event.preventDefault();$('connect-room').disabled=true;$('dashboard-status').textContent='저장소를 클론하고 연결하고 있습니다. 네트워크에 따라 1~2분 걸릴 수 있습니다.';try{const response=await fetch('/api/rooms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('room-name').value,repo:$('room-repo').value})});const data=await response.json();if(!response.ok)throw new Error(data.error);await loadRooms();$('room-form').hidden=true;await openRoom(data.room.id);}catch(error){$('dashboard-status').textContent=error.message;}finally{$('connect-room').disabled=false;}};
+$('save-project').onclick=async()=>{if(running)return;$('save-project').disabled=true;$('status').textContent='이 프로젝트의 대화·결과를 검사하고 커밋·푸시하고 있습니다.';try{const response=await api('/api/room-save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roomId:currentRoom})});const data=await response.json();if(!response.ok)throw new Error(data.error);$('status').textContent=`GitHub 저장 완료 · ${data.branch} · ${data.commit} · 변경 파일 ${data.files}개`;await loadRooms();const room=rooms.find(r=>r.id===currentRoom);$('git-state').textContent=`${room.git.branch} · 변경 ${room.git.changes}개 · ${room.git.commit}`;}catch(error){$('status').textContent=error.message;}finally{$('save-project').disabled=false;}};
+if(localServer){try{await loadRooms();const id=new URLSearchParams(location.hash.slice(1)).get('room');if(rooms.some(r=>r.id===id))await openRoom(id);}catch(error){$('dashboard-status').textContent=error.message;$('worker-state').textContent='연결 확인 필요';}}
+else{$('dashboard-status').textContent='웹 화면은 배포됐습니다. 원격 맥 워커 연결은 아직 준비되지 않았습니다.';$('worker-state').textContent='원격 워커 미연결';$('new-room').disabled=true;$('room-grid').textContent='회의실과 프로젝트 기록은 맥에 있습니다. 현재 실제 작업은 로컬 회의실에서 진행하세요.';}

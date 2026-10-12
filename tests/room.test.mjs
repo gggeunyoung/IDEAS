@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import {validateRequest,runMeeting} from '../room.mjs';
 import {callProvider,publicConfig} from '../providers.mjs';
 import {createServer} from '../server.mjs';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
 const env={OPENAI_API_KEY:'test-openai',ANTHROPIC_API_KEY:'test-anthropic',GEMINI_API_KEY:'test-gemini'};
 const request={history:[{speaker:'사용자',text:'실험 하나를 제안해줘'}],participants:['gpt','claude','gemini'],mode:'live',review:true};
 
@@ -48,7 +51,8 @@ test('API 오류 응답의 비밀정보를 숨기고 모델 변경 시 비용을
   assert.ok(!JSON.stringify(publicConfig(env)).includes('test-openai'));
 });
 test('HTTP 통합: 화면 제공, 같은 출처 데모, 외부 출처 및 비밀 파일 거절',async()=>{
-  const server=createServer({env:{}});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const dir=await mkdtemp(path.join(tmpdir(),'ideas-http-test-'));
+  const server=createServer({env:{},projectRoot:dir,artifactDir:path.join(dir,'artifacts'),deliverableDir:path.join(dir,'deliverables')});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const url=`http://127.0.0.1:${server.address().port}`;
   try{
     assert.equal((await fetch(url)).status,200);
@@ -58,5 +62,5 @@ test('HTTP 통합: 화면 제공, 같은 출처 데모, 외부 출처 및 비밀
     const events=(await response.text()).trim().split('\n').map(line=>JSON.parse(line));assert.equal(events.filter(e=>e.type==='answer').length,6);
     assert.equal((await fetch(url+'/api/meeting',{...options,headers:{...options.headers,Origin:'https://other.example'}})).status,403);
     assert.equal((await fetch(url+'/api/meeting',{...options,body:JSON.stringify(request)})).status,400);
-  }finally{await new Promise(resolve=>server.close(resolve));}
+  }finally{await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}
 });
