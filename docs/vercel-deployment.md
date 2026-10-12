@@ -1,5 +1,7 @@
 # Vercel 연결 절차
 
+2026-10-12 웹 화면 배포 완료: [IDEAS 배포 화면](https://ideas-nine-opal.vercel.app/). GitHub `gggeunyoung/IDEAS`의 master와 기존 Vercel Hobby 팀을 연결했습니다.
+
 현재 배포는 **웹 화면만** 올리는 1단계입니다. 맥에서 구독으로 로그인한 Codex/Claude Code를 실행하는 서버는 Vercel 정적 웹 화면에 포함되지 않습니다. 원격 AI 서버를 연결하기 전에는 배포 화면의 AI 호출을 비활성화하고 미연결 상태를 명시합니다.
 
 ## GitHub → Vercel 웹 화면
