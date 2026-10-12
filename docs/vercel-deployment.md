@@ -1,5 +1,15 @@
 # Vercel 연결 절차
 
+## 2026-10-13 현재 상태
+
+기존 https://ideas-nine-opal.vercel.app/ 에 웹 화면과 인증된 API 중계를 배포했다. 회의실 비밀번호로 로그인하면 맥의 방 목록·대화·결과를 읽고 GPT·Claude에 실제 회의 요청을 전달한다. 원격 경로에서 독립 제안 2회와 상호 검토 2회를 확인했다.
+
+현재 구성과 실행·해제·재연결은 [원격 연결 운영 문서](remote-connection.md)를 읽는다. npm ci로 원격 중계 의존성을 설치하고 api/remote.js도 배포한다. Vercel production 환경에는 중계 인증키와 비공개 Blob 저장소 ID, 공개 웹 origin을 설정한다. 구독 로그인이나 API 키를 옮기지 않는다.
+
+아래는 원격 연결 전에 수행한 1단계 배포 기록이다. ‘원격 미연결’ 설명은 당시의 상태이며 현재는 위 구성으로 변경됐다.
+
+## 초기 웹 화면 배포 기록
+
 2026-10-12 웹 화면 배포 완료: [IDEAS 배포 화면](https://ideas-nine-opal.vercel.app/). GitHub `gggeunyoung/IDEAS`의 master와 기존 Vercel Hobby 팀을 연결했습니다.
 
 현재 배포는 **웹 화면만** 올리는 1단계입니다. 맥에서 구독으로 로그인한 Codex/Claude Code를 실행하는 서버는 Vercel 정적 웹 화면에 포함되지 않습니다. 원격 AI 서버를 연결하기 전에는 배포 화면의 AI 호출을 비활성화하고 미연결 상태를 명시합니다.
