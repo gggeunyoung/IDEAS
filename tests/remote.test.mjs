@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import {mkdtemp,rm,readFile} from 'node:fs/promises';
+import {mkdtemp,rm,readFile,mkdir,writeFile,readdir} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -9,13 +9,13 @@ import {createRemoteWorker,prepareRemoteSecrets} from '../remote-worker.mjs';
 import {createRemoteProxy,workerAddress} from '../remote-proxy.mjs';
 const listen=server=>new Promise(resolve=>server.listen(0,'127.0.0.1',()=>resolve(`http://127.0.0.1:${server.address().port}`)));
 const close=server=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();});
-async function workerFixture(t,handle){
+async function workerFixture(t,handle,{initializeDirectory,...workerOptions}={}){
   const directory=await mkdtemp(path.join(os.tmpdir(),'ideas-remote-test-'));const secrets=await prepareRemoteSecrets(directory),password=(await readFile(path.join(directory,'remote-login.txt'),'utf8')).split('\n')[1];
-  const local=http.createServer(handle),localUrl=await listen(local);let worker=await createRemoteWorker({secrets,localUrl,directory:path.join(directory,'jobs')}),url=await listen(worker);
+  const local=http.createServer(handle),localUrl=await listen(local);if(initializeDirectory)await initializeDirectory(path.join(directory,'jobs'));let worker=await createRemoteWorker({secrets,localUrl,directory:path.join(directory,'jobs'),...workerOptions}),url=await listen(worker);
   t.after(async()=>{await close(worker);await close(local);await rm(directory,{recursive:true,force:true});});
   const request=(route,{cookie,bridge=secrets.bridgeToken,body,method=body?'POST':'GET'}={})=>fetch(url+route,{method,headers:{Authorization:'Bearer '+bridge,'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},body:body?JSON.stringify(body):undefined});
   const login=async()=>{const response=await request('/api/auth/login',{body:{password}});assert.equal(response.status,200);return response.headers.get('set-cookie').split(';')[0];};
-  return {directory,secrets,request,login,restart:async()=>{await close(worker);worker=await createRemoteWorker({secrets,localUrl,directory:path.join(directory,'jobs')});url=await listen(worker);}};
+  return {directory,secrets,request,login,restart:async()=>{await close(worker);worker=await createRemoteWorker({secrets,localUrl,directory:path.join(directory,'jobs'),...workerOptions});url=await listen(worker);}};
 }
 async function eventually(fn){for(let i=0;i<150;i++){const value=await fn();if(value)return value;await new Promise(resolve=>setTimeout(resolve,10));}throw new Error('작업 대기 시간 초과');}
 async function fragmentedPost(url,headers,body){
@@ -46,8 +46,28 @@ test('remote jobs continue after submit disconnect, reject duplicates and resume
   assert.equal((await f.request('/api/jobs',{cookie,body:{...body,request:{different:true}}})).status,409);
   assert.equal((await f.request('/api/jobs',{cookie,body:{...body,id:randomUUID()}})).status,409);
   const result=await eventually(async()=>{const job=await (await f.request('/api/jobs/'+id,{cookie})).json();return job.status==='done'&&job;});assert.equal(calls,1);assert.equal(result.events[0].text,'result');assert.equal(result.history[0].text,'test');
+  const completedCancel=await (await f.request('/api/jobs/'+id+'/cancel',{cookie,body:{}})).json();assert.deepEqual(completedCancel,{cancelled:false,status:'done'});
   assert.deepEqual((await (await f.request('/api/jobs/'+id+'?after=1',{cookie})).json()).events,[{type:'done'}]);
   await f.restart();cookie=await f.login();assert.equal((await (await f.request('/api/jobs/'+id,{cookie})).json()).status,'done');
+});
+test('queued cancellation prevents starting a provider even before submission receipt',async t=>{
+  let release,entered;const paused=new Promise(resolve=>{release=resolve;}),ready=new Promise(resolve=>{entered=resolve;});t.after(()=>release());let calls=0;
+  const f=await workerFixture(t,(req,res)=>{calls++;res.end('{}');},{persistJob:async job=>{if(job.status==='queued'){entered();await paused;}}});
+  const cookie=await f.login(),id=randomUUID();const submission=f.request('/api/jobs',{cookie,body:{id,type:'meeting',request:{roomId:'test'}}});await ready;
+  assert.equal((await f.request('/api/jobs/'+id+'/cancel',{cookie,body:{}})).status,200);release();assert.equal((await submission).status,202);
+  const cancelled=await eventually(async()=>{const job=await (await f.request('/api/jobs/'+id,{cookie})).json();return job.status==='cancelled'&&job;});assert.equal(calls,0);assert.deepEqual(cancelled.events,[]);
+});
+test('failed job persistence releases the worker and Git operations reject cancellation',async t=>{
+  let fail=true,calls=0;const f=await workerFixture(t,(req,res)=>{calls++;res.writeHead(200,{'Content-Type':'application/json'});res.end('{"saved":true}');},{persistJob:async()=>{if(fail){fail=false;throw new Error('disk full');}}});
+  const cookie=await f.login(),failedId=randomUUID();assert.equal((await f.request('/api/jobs',{cookie,body:{id:failedId,type:'save-room',request:{roomId:'test'}}})).status,503);
+  assert.equal((await f.request('/api/jobs/'+failedId,{cookie})).status,404);assert.equal((await (await f.request('/api/auth/status',{cookie})).json()).activeJob,null);
+  const id=randomUUID();assert.equal((await f.request('/api/jobs',{cookie,body:{id,type:'save-room',request:{roomId:'test'}}})).status,202);await eventually(async()=>{const job=await (await f.request('/api/jobs/'+id,{cookie})).json();return job.status==='done';});assert.equal(calls,1);assert.equal((await f.request('/api/jobs/'+id+'/cancel',{cookie,body:{}})).status,409);
+});
+test('one corrupt job record cannot prevent login or recovery of valid interrupted jobs',async t=>{
+  const corruptId=randomUUID(),finishedId=randomUUID(),runningId=randomUUID();let calls=0;
+  const f=await workerFixture(t,()=>{calls++;},{initializeDirectory:async directory=>{await mkdir(directory,{recursive:true});await writeFile(path.join(directory,corruptId+'.json'),'{"id":');for(const [id,status] of [[finishedId,'done'],[runningId,'running']])await writeFile(path.join(directory,id+'.json'),JSON.stringify({id,type:'meeting',status,request:{roomId:'test'},events:[]}));}});
+  const cookie=await f.login();assert.equal((await (await f.request('/api/auth/status',{cookie})).json()).recoveryWarnings,1);assert.equal((await (await f.request('/api/jobs/'+finishedId,{cookie})).json()).status,'done');assert.equal((await (await f.request('/api/jobs/'+runningId,{cookie})).json()).status,'interrupted');assert.equal(calls,0);
+  const files=await readdir(path.join(f.directory,'jobs','quarantine'));assert.equal(files.length,1);assert.equal(await readFile(path.join(f.directory,'jobs','quarantine',files[0]),'utf8'),'{"id":');
 });
 test('remote cancellation aborts the running local request and preserves prior events',async t=>{
   let closed=false;const f=await workerFixture(t,(req,res)=>{res.writeHead(200,{'Content-Type':'application/x-ndjson'});res.write('{"type":"answer","text":"partial"}\n');res.on('close',()=>{closed=true;});});

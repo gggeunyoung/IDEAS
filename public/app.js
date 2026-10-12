@@ -111,7 +111,7 @@ async function remoteJson(route,options){const response=await fetch(route,option
 async function pollJob(id,onUpdate){
   let cursor=0,failures=0;
   while(true){
-    let job;try{job=await remoteJson(`/api/jobs/${id}?after=${cursor}`);failures=0;}catch(error){if(++failures>=5)throw new Error(error.message+' 작업은 맥에서 계속 실행될 수 있습니다. 모든 회의실에서 이전 작업을 다시 조회하세요.');$('status').textContent=`결과 연결 재시도 ${failures}/5 · 맥의 작업 완료 여부는 아직 확인되지 않았습니다.`;await pause(3000);continue;}
+    let job;try{job=await remoteJson(`/api/jobs/${id}?after=${cursor}`);failures=0;}catch(error){if(error.status===401)throw new Error('로그인이 만료됐습니다. 다시 로그인한 뒤 이전 작업을 조회하세요.');if(error.status===404){localStorage.removeItem('ideas-pending-job');$('resume-job').hidden=true;remoteJob=null;throw error;}if(++failures>=5)throw new Error(error.message+' 작업은 맥에서 계속 실행될 수 있습니다. 상단의 이전 작업 다시 조회를 누르세요.');$('status').textContent=`결과 연결 재시도 ${failures}/5 · 맥의 작업 완료 여부는 아직 확인되지 않았습니다.`;await pause(3000);continue;}
     await onUpdate?.(job);cursor=job.cursor;
     if(['done','failed','cancelled','interrupted'].includes(job.status)){localStorage.removeItem('ideas-pending-job');$('resume-job').hidden=true;remoteJob=null;if(job.status!=='done')throw new Error(job.error||'작업이 완료되지 않았습니다.');return job.result;}
     await pause(2000);
@@ -178,7 +178,7 @@ async function openRoom(id){
   try{artifactLink(JSON.parse(localStorage.getItem('ideas-artifact:'+id)||(id==='platform'?localStorage.getItem('ideas-artifact'):'null')||'null'));}catch{}
   render();await refresh(false);await Promise.all([refreshResults(),loadFiles()]);
 }
-function showLogin(){$('login-view').hidden=false;$('dashboard').hidden=true;$('room-view').hidden=true;$('logout').hidden=true;$('worker-state').textContent='회의실 로그인 필요';}
+function showLogin(){$('login-view').hidden=false;$('dashboard').hidden=true;$('room-view').hidden=true;$('logout').hidden=true;$('resume-job').hidden=true;$('worker-state').textContent='회의실 로그인 필요';}
 async function initializeRooms(){
   if(!localServer){const auth=await remoteJson('/api/auth/status');$('logout').hidden=false;if(auth.activeJob)localStorage.setItem('ideas-pending-job',auth.activeJob.id);}
   $('login-view').hidden=true;$('dashboard').hidden=false;$('local-access').hidden=true;await loadRooms();const id=new URLSearchParams(location.hash.slice(1)).get('room');if(rooms.some(r=>r.id===id))await openRoom(id);else if(location.hash==='#new-room')$('new-room').click();$('resume-job').hidden=localServer||!localStorage.getItem('ideas-pending-job');
