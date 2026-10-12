@@ -8,16 +8,16 @@ const root=path.dirname(path.dirname(fileURLToPath(import.meta.url))),runtime=pa
 const origin=process.env.IDEAS_PUBLIC_ORIGIN||'https://ideas-nine-opal.vercel.app';
 if(new URL(origin).origin!==origin||new URL(origin).protocol!=='https:')throw new Error('원격 웹 주소는 HTTPS origin이어야 합니다.');
 await mkdir(runtime,{recursive:true,mode:0o700});const secrets=await prepareRemoteSecrets(runtime);
-let localServer,checkingLocal=false;
+let localServer,checkingLocal=false,stopping=false;
 async function ensureLocalServer(){
   if(checkingLocal)return;checkingLocal=true;
   try{const health=await fetch('http://127.0.0.1:3030/api/rooms',{signal:AbortSignal.timeout(3000)});if(!health.ok)throw new Error();}
-  catch{if(!localServer?.listening){localServer=createServer();try{await new Promise((resolve,reject)=>{localServer.once('error',reject);localServer.listen(3030,'127.0.0.1',resolve);});console.log('맥 회의실 서버 시작');}catch{console.log('맥 회의실 서버 연결 대기 중');}}}
+  catch{if(!stopping&&!localServer?.listening){localServer=createServer();try{await new Promise((resolve,reject)=>{localServer.once('error',reject);localServer.listen(3030,'127.0.0.1',resolve);});console.log('맥 회의실 서버 시작');}catch{console.log('맥 회의실 서버 연결 대기 중');}}}
   finally{checkingLocal=false;}
 }
 await ensureLocalServer();
 const worker=await createRemoteWorker({secrets});await new Promise(resolve=>worker.listen(3031,'127.0.0.1',resolve));
-let tunnel,url,registered=false,stopping=false,retryTimer,registerTimer,healthTimer;
+let tunnel,url,registered=false,retryTimer,registerTimer,healthTimer;
 async function register(){
   if(!url||registered||stopping)return;
   try{const response=await fetch(origin+'/api/worker/register',{method:'POST',redirect:'error',headers:{Authorization:'Bearer '+secrets.bridgeToken,'Content-Type':'application/json'},body:JSON.stringify({url}),signal:AbortSignal.timeout(25000)});if(!response.ok)throw new Error();registered=true;await writeFile(path.join(runtime,'remote-connection.json'),JSON.stringify({url,origin,registeredAt:new Date().toISOString()}),{mode:0o600});console.log('Vercel에 맥 워커 연결 완료');}catch{console.log('Vercel 연결 등록 대기 중 · 15초 후 재시도');}

@@ -35,7 +35,7 @@
 
 - room-registry.mjs: 등록된 저장소·로컬 경로만 방 ID로 연결한다. 등록 목록 .runtime/rooms.json은 기기별 정보이며 Git에서 제외한다.
 - server.mjs: roomId에 따라 자료, 현재 대화, 결과 파일과 회의록의 루트를 분리한다. 사용자 임의 경로를 요청으로 받지 않는다.
-- 등록된 프로젝트의 현재 대화는 .ideas/session.json에 저장한다. 기기 내부 상태이므로 공유하지 않는다. 완료한 회의록은 conversations/에, 생성 파일은 outputs/에 저장한다. 방 분리·origin·경로·Git 저장을 포함한 현재 자동 테스트는 33개를 통과했다.
+- 등록된 프로젝트의 현재 대화는 .ideas/session.json에 저장한다. 기기 내부 상태이므로 공유하지 않는다. 완료한 회의록은 conversations/에, 생성 파일은 outputs/에 저장한다. 방 분리·origin·경로·Git 저장을 포함한 현재 자동 테스트는 35개를 통과했다.
 - room-git.mjs: 현재 방의 명시된 문서·회의록·결과만 검사해 커밋·정상 푸시한다. 다른 변경, .env, 기기 상태, 미리 스테이징한 변경을 섞지 않는다.
 - 첫 시험용 비공개 저장소: https://github.com/gggeunyoung/ideas-room-lab
 - 이 맥의 시험 폴더: /Users/kimgeunyoung/ideas-room-lab

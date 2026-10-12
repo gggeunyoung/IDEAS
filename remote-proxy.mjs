@@ -7,7 +7,7 @@ export function createRemoteProxy({env=process.env,fetchImpl=fetch,connectionSto
     async read(){const {get}=await import('@vercel/blob');const result=await get('ideas/worker-connection.json',{access:'private',useCache:false,storeId:env.BLOB_STORE_ID});if(result?.statusCode!==200)return null;return JSON.parse(await new Response(result.stream).text());},
     async write(value){const {put}=await import('@vercel/blob');await put('ideas/worker-connection.json',JSON.stringify(value),{access:'private',addRandomSuffix:false,allowOverwrite:true,storeId:env.BLOB_STORE_ID});}
   };
-  const bodyOf=async req=>{let body;if(req.body!==undefined)body=typeof req.body==='string'?req.body:JSON.stringify(req.body);else{body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>150000)throw new Error('요청이 너무 큽니다.');}}if(Buffer.byteLength(body)>150000)throw new Error('요청이 너무 큽니다.');return body;};
+  const bodyOf=async req=>{let body;if(req.body!==undefined)body=typeof req.body==='string'?req.body:JSON.stringify(req.body);else{const chunks=[];let length=0;for await(const chunk of req){const bytes=Buffer.from(chunk);length+=bytes.length;if(length>150000)throw new Error('요청이 너무 큽니다.');chunks.push(bytes);}body=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks));}if(Buffer.byteLength(body)>150000)throw new Error('요청이 너무 큽니다.');return body;};
   return async function handler(req,res){
     const send=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
     const incoming=new URL(req.url,'https://ideas-nine-opal.vercel.app');let route=incoming.searchParams.get('route');

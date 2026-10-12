@@ -18,6 +18,11 @@ async function workerFixture(t,handle){
   return {directory,secrets,request,login,restart:async()=>{await close(worker);worker=await createRemoteWorker({secrets,localUrl,directory:path.join(directory,'jobs')});url=await listen(worker);}};
 }
 async function eventually(fn){for(let i=0;i<150;i++){const value=await fn();if(value)return value;await new Promise(resolve=>setTimeout(resolve,10));}throw new Error('작업 대기 시간 초과');}
+async function fragmentedPost(url,headers,body){
+  const bytes=Buffer.from(JSON.stringify(body)),first=bytes.indexOf(Buffer.from('한글'));
+  assert.ok(first>=0);
+  return new Promise((resolve,reject)=>{const req=http.request(url,{method:'POST',headers:{'Content-Type':'application/json',...headers}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolve({status:res.statusCode,body:JSON.parse(Buffer.concat(chunks).toString('utf8'))}));});req.on('error',reject);req.write(bytes.subarray(0,first+1));setTimeout(()=>req.end(bytes.subarray(first+1)),15);});
+}
 test('remote worker rejects public, forged, logged-out access and arbitrary routes',async t=>{
   let calls=0;const f=await workerFixture(t,(req,res)=>{calls++;res.writeHead(200,{'Content-Type':'application/json'});res.end('{"items":[]}');});
   assert.equal((await f.request('/api/rooms',{bridge:'wrong'})).status,401);assert.equal((await f.request('/api/rooms')).status,401);assert.equal(calls,0);
@@ -63,4 +68,14 @@ test('Vercel proxy protects origin, URL boundaries, cookie and worker registrati
   const response=await fetch(url+'/api/rooms?roomId=abc&arbitrary=bad',{headers:{Cookie:'__Host-ideas_session='+'a'.repeat(43)}});assert.equal(response.status,200);assert.equal(calls,1);assert.equal(lastRequest.url,'https://test-worker.trycloudflare.com/api/rooms?roomId=abc');assert.equal(lastRequest.options.headers.Authorization,'Bearer bridge');
   assert.equal((await fetch(url+'/api/remote?route=../../.env')).status,404);
   for(const address of ['http://test.trycloudflare.com','https://test.trycloudflare.com:8443','https://test.trycloudflare.com@evil.com','https://test.trycloudflare.com/path','https://test.trycloudflare.com?x=y'])assert.throws(()=>workerAddress(address));
+});
+test('Korean JSON survives split UTF-8 bytes through proxy and worker',async t=>{
+  const f=await workerFixture(t,async(req,res)=>{const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({name:body.name}));});
+  const cookie=await f.login(),id=randomUUID();
+  // Exercise the actual worker socket with one Korean character split across chunks.
+  const serverAddress=await f.request('/api/auth/status',{cookie});const workerUrl=new URL(serverAddress.url).origin;
+  const created=await fragmentedPost(workerUrl+'/api/jobs',{Authorization:'Bearer '+f.secrets.bridgeToken,Cookie:cookie},{id,type:'connect-room',request:{name:'한글 뒤에 남는 대화'}});assert.equal(created.status,202);
+  const result=await eventually(async()=>{const job=await (await f.request('/api/jobs/'+id,{cookie})).json();return job.status==='done'&&job;});assert.equal(result.result.name,'한글 뒤에 남는 대화');
+  let forwarded;const proxy=http.createServer(createRemoteProxy({env:{IDEAS_BRIDGE_TOKEN:'bridge',IDEAS_WORKER_URL:'https://test.trycloudflare.com',IDEAS_PUBLIC_ORIGIN:'https://ideas.example'},fetchImpl:async(url,options)=>{forwarded=JSON.parse(options.body);return new Response('{}');}}));const proxyUrl=await listen(proxy);t.after(()=>close(proxy));
+  assert.equal((await fragmentedPost(proxyUrl+'/api/auth/login',{Origin:'https://ideas.example'},{password:'한글 비밀번호'})).status,200);assert.equal(forwarded.password,'한글 비밀번호');
 });

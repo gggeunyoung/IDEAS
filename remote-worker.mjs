@@ -17,7 +17,7 @@ export async function prepareRemoteSecrets(directory=path.join(root,'.runtime'))
   await writeFile(path.join(directory,'remote-login.txt'),`IDEAS 회의실 로그인 비밀번호\n${password}\n\nhttps://ideas-nine-opal.vercel.app/ 에서만 입력하세요. Git에 저장하지 마세요.\n`,{mode:0o600,flag:'wx'});
   return secrets;
 }
-async function readJsonBody(req){let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>150000)throw new Error('요청이 너무 큽니다.');}return JSON.parse(body||'{}');}
+async function readJsonBody(req){const chunks=[];let length=0;for await(const chunk of req){const bytes=Buffer.from(chunk);length+=bytes.length;if(length>150000)throw new Error('요청이 너무 큽니다.');chunks.push(bytes);}const body=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks));return JSON.parse(body||'{}');}
 export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:3030',directory=path.join(root,'.runtime','remote-jobs'),fetchImpl=fetch}={}){
   if(!secrets?.bridgeToken||!secrets?.passwordHash||!secrets?.salt)throw new Error('원격 인증 설정이 필요합니다.');
   const local=new URL(localUrl);if(local.protocol!=='http:'||local.hostname!=='127.0.0.1'||local.pathname!=='/')throw new Error('로컬 서버 주소가 올바르지 않습니다.');

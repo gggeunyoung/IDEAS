@@ -55,7 +55,7 @@ export function createServer({env=process.env,invoke,invokeLocal,status=localSta
     if(busy)return send(409,{error:'진행 중인 작업이 있습니다. 완료 후 다시 보내세요.'});
     const controller=new AbortController();let acquired=false,persist=Promise.resolve();
     try{
-      let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>150000)throw new Error('요청이 너무 큽니다.');}
+      const chunks=[];let length=0;for await(const chunk of req){const bytes=Buffer.from(chunk);length+=bytes.length;if(length>150000)throw new Error('요청이 너무 큽니다.');chunks.push(bytes);}const body=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks));
       const data=JSON.parse(body);
       if(route==='/api/rooms'){busy=true;acquired=true;const room=await registry.clone(data);return send(201,{room});}
       if(url.searchParams.get('roomId')&&data.roomId&&url.searchParams.get('roomId')!==data.roomId)throw new Error('회의실 요청이 일치하지 않습니다.');
@@ -67,7 +67,8 @@ export function createServer({env=process.env,invoke,invokeLocal,status=localSta
       if(request.mode==='subscription'){const local=await status({env});if(request.participants.some(id=>!local.find(p=>p.id===id)?.ready))throw new Error('선택한 참가자의 구독 계정으로 CLI에 로그인하세요. API로 대체하지 않습니다.');}
       const context=await snapshotFiles(room.root,request.files||[]);
       if(busy)return send(409,{error:'진행 중인 회의가 있습니다.'});busy=true;acquired=true;
-      const messages=request.history.map(m=>({...m,mode:request.mode,workflow:request.workflow}));await saveSession(room.root,messages);
+      const saved=await loadSession(room.root);
+      const messages=request.history.map((m,index)=>{const previous=saved[index];return previous&&previous.speaker===m.speaker&&previous.text===m.text?previous:{...m,mode:request.mode,workflow:request.workflow};});await saveSession(room.root,messages);
       res.on('close',()=>{if(!res.writableEnded)controller.abort();});res.writeHead(200,{'Content-Type':'application/x-ndjson; charset=utf-8'});
       const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(request.workflow==='files'?600000:request.mode==='subscription'?300000:120000)]);
       const events=[];let completed=false;
