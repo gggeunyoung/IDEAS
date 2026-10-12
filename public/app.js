@@ -1,5 +1,5 @@
 const $=id=>document.getElementById(id);
-let messages=[],config,running=false,controller,currentRoom='platform',rooms=[];
+let messages=[],config,running=false,controller,currentRoom='platform',rooms=[],remoteJob=null;
 const apiUrl=route=>route+(route.includes('?')?'&':'?')+'roomId='+encodeURIComponent(currentRoom);
 const api=(route,options)=>fetch(apiUrl(route),options);
 try{const saved=JSON.parse(localStorage.getItem('ideas-room')||'[]');if(Array.isArray(saved))messages=saved.filter(m=>m&&typeof m.text==='string'&&typeof m.speaker==='string');}catch{}
@@ -46,7 +46,7 @@ function render(){
   $('log').scrollTop=$('log').scrollHeight;
 }
 function searchState(){$('web-search').disabled=running||$('mode').value!=='subscription';$('search-hint').textContent=$('mode').value==='subscription'?'조사가 필요하면 검색합니다. 검색어는 외부 검색 서비스로 전송됩니다.':'웹 검색 연결은 현재 기존 구독 모드에서 사용할 수 있습니다.';}
-function state(active){running=active;for(const id of ['send','clear','mode','review','workflow','writer','refresh','refresh-results','home','save-project'])$(id).disabled=active;searchState();document.querySelectorAll('[name=participant],[name=file]').forEach(e=>e.disabled=active);$('stop').hidden=!active;}
+function state(active){running=active;for(const id of ['send','clear','mode','review','workflow','writer','refresh','refresh-results','home','save-project','logout','resume-job'])$(id).disabled=active;searchState();document.querySelectorAll('[name=participant],[name=file]').forEach(e=>e.disabled=active);$('stop').hidden=!active;}
 function selected(){return [...document.querySelectorAll('[name=participant]:checked')].map(e=>e.value);}
 function updateWriter(){
   const previous=$('writer').value||preferences.writer;$('writer').replaceChildren();
@@ -106,6 +106,22 @@ function onEvent(e,mode,workflow){
   if(e.type==='artifact'){artifactLink(e);try{localStorage.setItem('ideas-artifact:'+currentRoom,JSON.stringify({id:e.id}));}catch{}}
   if(e.type==='done')$('status').textContent='회의가 끝났습니다. 결과물을 다운로드하거나 다음 방향을 입력하세요.';
 }
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function remoteJson(route,options){const response=await fetch(route,options);let data;try{data=await response.json();}catch{throw new Error('원격 연결 응답을 읽지 못했습니다. 잠시 후 다시 조회하세요.');}if(!response.ok){if(response.status===401)showLogin();const error=new Error(data.error||'원격 요청에 실패했습니다.');error.status=response.status;throw error;}return data;}
+async function pollJob(id,onUpdate){
+  let cursor=0,failures=0;
+  while(true){
+    let job;try{job=await remoteJson(`/api/jobs/${id}?after=${cursor}`);failures=0;}catch(error){if(++failures>=5)throw new Error(error.message+' 작업은 맥에서 계속 실행될 수 있습니다. 모든 회의실에서 이전 작업을 다시 조회하세요.');$('status').textContent=`결과 연결 재시도 ${failures}/5 · 맥의 작업 완료 여부는 아직 확인되지 않았습니다.`;await pause(3000);continue;}
+    await onUpdate?.(job);cursor=job.cursor;
+    if(['done','failed','cancelled','interrupted'].includes(job.status)){localStorage.removeItem('ideas-pending-job');$('resume-job').hidden=true;remoteJob=null;if(job.status!=='done')throw new Error(job.error||'작업이 완료되지 않았습니다.');return job.result;}
+    await pause(2000);
+  }
+}
+async function submitRemoteJob(type,request,onUpdate){
+  const id=crypto.randomUUID();remoteJob=id;localStorage.setItem('ideas-pending-job',id);$('resume-job').hidden=false;
+  try{await remoteJson('/api/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,type,request})});}catch(error){if(error.status>=400&&error.status<500){remoteJob=null;localStorage.removeItem('ideas-pending-job');$('resume-job').hidden=true;}throw error;}
+  return pollJob(id,onUpdate);
+}
 $('composer').addEventListener('submit',async event=>{
   event.preventDefault();if(running||!config)return;
   const text=$('message').value.trim(),ids=selected(),mode=$('mode').value,workflow=$('workflow').value;
@@ -121,7 +137,13 @@ $('composer').addEventListener('submit',async event=>{
   controller=new AbortController();state(true);$('status').textContent=mode==='subscription'?'구독 CLI를 호출합니다. 앱 화면을 조작하지 않습니다.':mode==='live'?'별도 과금 API 호출을 시작합니다.':'무료 데모를 시작합니다.';
   let failures=0,lastNotice='';$('artifact').hidden=true;
   try{
-    const response=await api('/api/meeting',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roomId:currentRoom,history,participants:ids,mode,review:$('review').checked,workflow,writer:$('writer').value,files,webSearch:mode==='subscription'&&$('web-search').checked}),signal:controller.signal});
+    const request={roomId:currentRoom,history,participants:ids,mode,review:$('review').checked,workflow,writer:$('writer').value,files,webSearch:mode==='subscription'&&$('web-search').checked};
+    if(!localServer){
+      messages.push({speaker:'사용자',text,mode,workflow});save();render();$('message').value='';$('status').textContent='맥에서 회의를 시작합니다. 토론은 보통 1~5분, 파일 협업은 최대 10분 걸릴 수 있습니다.';
+      await submitRemoteJob('meeting',request,job=>{for(const e of job.events){if(e.type==='error')failures++;if(e.type==='notice')lastNotice=e.text;onEvent(e,mode,workflow);}});
+      if(failures||lastNotice)$('status').textContent=`회의 종료${failures?` · 실패한 응답 ${failures}개`:''}${lastNotice?` · ${lastNotice}`:''}`;return;
+    }
+    const response=await api('/api/meeting',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request),signal:controller.signal});
     if(!response.ok){const data=await response.json();throw new Error(data.error);}
     messages.push({speaker:'사용자',text,mode,workflow});save();render();$('message').value='';
     const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',doneEvent=false;
@@ -131,7 +153,7 @@ $('composer').addEventListener('submit',async event=>{
   }catch(error){$('status').textContent=error.name==='AbortError'?'회의를 중단했습니다. 이미 사용한 계정 한도나 API 비용은 되돌릴 수 없습니다.':error.message;}
   finally{state(false);$('message').focus();}
 });
-$('stop').onclick=()=>controller?.abort();
+$('stop').onclick=async()=>{if(localServer)controller?.abort();else if(remoteJob){try{await remoteJson(`/api/jobs/${remoteJob}/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});$('status').textContent='맥에 중단을 요청했습니다.';}catch(error){$('status').textContent=error.message;}}};
 $('refresh-results').onclick=refreshResults;
 $('refresh').onclick=()=>refresh(false);
 $('workflow').onchange=()=>{if($('workflow').value==='files')$('review').checked=true;updateWriter();};
@@ -147,7 +169,7 @@ async function loadFiles(){
 async function loadRooms(){
   const response=await fetch('/api/rooms');if(!response.ok)throw new Error('회의실 목록을 읽지 못했습니다.');rooms=(await response.json()).items;$('room-grid').replaceChildren();
   for(const room of rooms){const card=document.createElement('article');card.className='room-card';const kind=document.createElement('span');kind.className='room-kind';kind.textContent=room.kind==='platform'?'회의실 프로그램 개발':'프로젝트 작업 공간';const title=document.createElement('h2');title.textContent=room.name;const root=document.createElement('code');root.textContent=room.root;const status=document.createElement('p');status.textContent=room.git.branch?`${room.git.branch} · 변경 ${room.git.changes}개 · ${room.git.commit}`:'Git 상태 확인 필요';card.append(kind,title,root,status);if(room.repo){const repo=document.createElement('a');repo.href=room.repo;repo.target='_blank';repo.rel='noopener noreferrer';repo.textContent=room.repo.replace('https://github.com/','');card.append(repo);}const button=document.createElement('button');button.textContent='회의실 열기 →';button.onclick=()=>openRoom(room.id);card.append(button);$('room-grid').append(card);}
-  $('dashboard-status').textContent=`연결된 회의실 ${rooms.length}개 · 방마다 자료·대화·결과가 분리됩니다.`;$('worker-state').textContent='로컬 맥 워커 연결됨';
+  $('dashboard-status').textContent=`연결된 회의실 ${rooms.length}개 · 방마다 자료·대화·결과가 분리됩니다.`;$('worker-state').textContent=localServer?'로컬 맥 워커 연결됨':'원격 맥 워커 연결됨';
 }
 async function openRoom(id){
   if(running)return;currentRoom=id;config=null;$('dashboard').hidden=true;$('room-view').hidden=false;$('artifact').hidden=true;$('message').value='';location.hash='room='+id;
@@ -156,12 +178,16 @@ async function openRoom(id){
   try{artifactLink(JSON.parse(localStorage.getItem('ideas-artifact:'+id)||(id==='platform'?localStorage.getItem('ideas-artifact'):'null')||'null'));}catch{}
   render();await refresh(false);await Promise.all([refreshResults(),loadFiles()]);
 }
-function showRemoteDashboard(){
-  $('dashboard-status').textContent='이 페이지에서는 회의실을 불러오거나 생성할 수 없습니다. 아래 링크로 이 맥의 회의실을 여세요.';$('worker-state').textContent='배포 화면 · 맥 서버 미연결';$('local-access').hidden=false;$('room-grid').replaceChildren();$('new-room').textContent='맥에서 새 회의실 연결';
+function showLogin(){$('login-view').hidden=false;$('dashboard').hidden=true;$('room-view').hidden=true;$('logout').hidden=true;$('worker-state').textContent='회의실 로그인 필요';}
+async function initializeRooms(){
+  if(!localServer){const auth=await remoteJson('/api/auth/status');$('logout').hidden=false;if(auth.activeJob)localStorage.setItem('ideas-pending-job',auth.activeJob.id);}
+  $('login-view').hidden=true;$('dashboard').hidden=false;$('local-access').hidden=true;await loadRooms();const id=new URLSearchParams(location.hash.slice(1)).get('room');if(rooms.some(r=>r.id===id))await openRoom(id);else if(location.hash==='#new-room')$('new-room').click();$('resume-job').hidden=localServer||!localStorage.getItem('ideas-pending-job');
 }
-$('home').onclick=async()=>{if(running)return;$('room-view').hidden=true;$('dashboard').hidden=false;history.replaceState(null,'',location.pathname);if(!localServer){showRemoteDashboard();return;}try{await loadRooms();}catch(error){$('dashboard-status').textContent=error.message;}};
-$('new-room').onclick=()=>{if(!localServer){location.href='http://127.0.0.1:3030/#new-room';return;}$('room-form').hidden=false;$('room-name').focus();};$('cancel-room').onclick=()=>{$('room-form').hidden=true;};
-$('room-form').onsubmit=async event=>{event.preventDefault();$('connect-room').disabled=true;$('dashboard-status').textContent='저장소를 클론하고 연결하고 있습니다. 네트워크에 따라 1~2분 걸릴 수 있습니다.';try{const response=await fetch('/api/rooms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('room-name').value,repo:$('room-repo').value})});const data=await response.json();if(!response.ok)throw new Error(data.error);await loadRooms();$('room-form').hidden=true;await openRoom(data.room.id);}catch(error){$('dashboard-status').textContent=error.message;}finally{$('connect-room').disabled=false;}};
-$('save-project').onclick=async()=>{if(running)return;$('save-project').disabled=true;$('status').textContent='이 프로젝트의 대화·결과를 검사하고 커밋·푸시하고 있습니다.';try{const response=await api('/api/room-save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roomId:currentRoom})});const data=await response.json();if(!response.ok)throw new Error(data.error);$('status').textContent=`GitHub 저장 완료 · ${data.branch} · ${data.commit} · 변경 파일 ${data.files}개`;await loadRooms();const room=rooms.find(r=>r.id===currentRoom);$('git-state').textContent=`${room.git.branch} · 변경 ${room.git.changes}개 · ${room.git.commit}`;}catch(error){$('status').textContent=error.message;}finally{$('save-project').disabled=false;}};
-if(localServer){try{await loadRooms();const id=new URLSearchParams(location.hash.slice(1)).get('room');if(rooms.some(r=>r.id===id))await openRoom(id);else if(location.hash==='#new-room')$('new-room').click();}catch(error){$('dashboard-status').textContent=error.message;$('worker-state').textContent='연결 확인 필요';}}
-else showRemoteDashboard();
+$('login-form').onsubmit=async event=>{event.preventDefault();$('login-submit').disabled=true;$('login-status').textContent='맥 워커에 로그인하고 있습니다.';try{await remoteJson('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('login-password').value})});$('login-password').value='';await initializeRooms();}catch(error){$('login-status').textContent=error.message;}finally{$('login-submit').disabled=false;}};
+$('logout').onclick=async()=>{if(running)return;try{await remoteJson('/api/auth/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});showLogin();messages=[];rooms=[];config=null;$('log').querySelectorAll('.bubble').forEach(e=>e.remove());$('room-grid').replaceChildren();$('login-status').textContent='로그아웃했습니다.';}catch(error){$('status').textContent=error.message;}};
+$('home').onclick=async()=>{if(running)return;$('room-view').hidden=true;$('dashboard').hidden=false;history.replaceState(null,'',location.pathname);try{await loadRooms();$('resume-job').hidden=localServer||!localStorage.getItem('ideas-pending-job');}catch(error){$('dashboard-status').textContent=error.message;}};
+$('new-room').onclick=()=>{$('room-form').hidden=false;$('room-name').focus();};$('cancel-room').onclick=()=>{$('room-form').hidden=true;};
+$('room-form').onsubmit=async event=>{event.preventDefault();$('connect-room').disabled=true;$('new-room').disabled=true;$('dashboard-status').textContent='맥에서 저장소를 클론하고 연결하고 있습니다. 네트워크에 따라 1~2분 걸릴 수 있습니다.';try{const request={name:$('room-name').value,repo:$('room-repo').value};let data;if(localServer){const response=await fetch('/api/rooms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});data=await response.json();if(!response.ok)throw new Error(data.error);}else data=await submitRemoteJob('connect-room',request);await loadRooms();$('room-form').hidden=true;await openRoom(data.room.id);}catch(error){$('dashboard-status').textContent=error.message;}finally{$('connect-room').disabled=false;$('new-room').disabled=false;}};
+$('save-project').onclick=async()=>{if(running)return;$('save-project').disabled=true;$('status').textContent='맥에서 이 프로젝트의 대화·결과를 검사하고 커밋·푸시하고 있습니다.';try{let data;if(localServer){const response=await api('/api/room-save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roomId:currentRoom})});data=await response.json();if(!response.ok)throw new Error(data.error);}else data=await submitRemoteJob('save-room',{roomId:currentRoom});$('status').textContent=`GitHub 저장 완료 · ${data.branch} · ${data.commit} · 변경 파일 ${data.files}개`;await loadRooms();const room=rooms.find(r=>r.id===currentRoom);$('git-state').textContent=`${room.git.branch} · 변경 ${room.git.changes}개 · ${room.git.commit}`;}catch(error){$('status').textContent=error.message;}finally{$('save-project').disabled=false;}};
+$('resume-job').onclick=async()=>{const id=localStorage.getItem('ideas-pending-job');if(!id)return;try{const job=await remoteJson(`/api/jobs/${id}?after=0`);if(job.type==='meeting'){await loadRooms();await openRoom(job.roomId);messages=(job.history||[]).map(m=>({...m,mode:job.mode,workflow:job.workflow}));render();state(true);remoteJob=id;await pollJob(id,data=>{for(const e of data.events)onEvent(e,job.mode,job.workflow);});}else{remoteJob=id;await pollJob(id);await loadRooms();$('dashboard-status').textContent='이전 작업 결과를 확인했습니다.';}}catch(error){$('status').textContent=error.message;$('dashboard-status').textContent=error.message;}finally{state(false);}};
+try{await initializeRooms();}catch(error){if(!localServer){showLogin();$('login-status').textContent=error.message;}else{$('dashboard-status').textContent=error.message;$('worker-state').textContent='연결 확인 필요';}}

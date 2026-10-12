@@ -1,0 +1,66 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import {mkdtemp,rm,readFile} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {createRemoteWorker,prepareRemoteSecrets} from '../remote-worker.mjs';
+import {createRemoteProxy,workerAddress} from '../remote-proxy.mjs';
+const listen=server=>new Promise(resolve=>server.listen(0,'127.0.0.1',()=>resolve(`http://127.0.0.1:${server.address().port}`)));
+const close=server=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();});
+async function workerFixture(t,handle){
+  const directory=await mkdtemp(path.join(os.tmpdir(),'ideas-remote-test-'));const secrets=await prepareRemoteSecrets(directory),password=(await readFile(path.join(directory,'remote-login.txt'),'utf8')).split('\n')[1];
+  const local=http.createServer(handle),localUrl=await listen(local);let worker=await createRemoteWorker({secrets,localUrl,directory:path.join(directory,'jobs')}),url=await listen(worker);
+  t.after(async()=>{await close(worker);await close(local);await rm(directory,{recursive:true,force:true});});
+  const request=(route,{cookie,bridge=secrets.bridgeToken,body,method=body?'POST':'GET'}={})=>fetch(url+route,{method,headers:{Authorization:'Bearer '+bridge,'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},body:body?JSON.stringify(body):undefined});
+  const login=async()=>{const response=await request('/api/auth/login',{body:{password}});assert.equal(response.status,200);return response.headers.get('set-cookie').split(';')[0];};
+  return {directory,secrets,request,login,restart:async()=>{await close(worker);worker=await createRemoteWorker({secrets,localUrl,directory:path.join(directory,'jobs')});url=await listen(worker);}};
+}
+async function eventually(fn){for(let i=0;i<150;i++){const value=await fn();if(value)return value;await new Promise(resolve=>setTimeout(resolve,10));}throw new Error('작업 대기 시간 초과');}
+test('remote worker rejects public, forged, logged-out access and arbitrary routes',async t=>{
+  let calls=0;const f=await workerFixture(t,(req,res)=>{calls++;res.writeHead(200,{'Content-Type':'application/json'});res.end('{"items":[]}');});
+  assert.equal((await f.request('/api/rooms',{bridge:'wrong'})).status,401);assert.equal((await f.request('/api/rooms')).status,401);assert.equal(calls,0);
+  assert.equal((await f.request('/api/auth/login',{body:{password:'wrong'}})).status,401);
+  const response=await f.request('/api/auth/login',{body:{password:(await readFile(path.join(f.directory,'remote-login.txt'),'utf8')).split('\n')[1]}}),cookie=response.headers.get('set-cookie').split(';')[0];
+  assert.match(response.headers.get('set-cookie'),/HttpOnly; Secure; SameSite=Strict/);
+  assert.equal((await f.request('/api/rooms',{cookie})).status,200);assert.equal(calls,1);
+  assert.equal((await f.request('/.env',{cookie})).status,404);assert.equal((await f.request('/api/config',{cookie:'__Host-ideas_session='+'a'.repeat(43)})).status,401);
+  assert.equal((await f.request('/api/auth/logout',{cookie,body:{}})).status,200);assert.equal((await f.request('/api/rooms',{cookie})).status,401);
+  const another=await f.login();await f.restart();assert.equal((await f.request('/api/rooms',{cookie:another})).status,401);
+});
+test('remote login is throttled before brute-force requests reach the local server',async t=>{
+  const f=await workerFixture(t,()=>assert.fail('로그인 요청은 로컬 서버에 전달하지 않는다'));
+  for(let i=0;i<10;i++)assert.equal((await f.request('/api/auth/login',{body:{password:'bad'}})).status,401);
+  assert.equal((await f.request('/api/auth/login',{body:{password:'bad'}})).status,429);
+});
+test('remote jobs continue after submit disconnect, reject duplicates and resume after worker restart',async t=>{
+  let calls=0;const f=await workerFixture(t,(req,res)=>{calls++;assert.match(req.headers.origin,/^http:\/\/127\.0\.0\.1:/);res.writeHead(200,{'Content-Type':'application/x-ndjson'});setTimeout(()=>res.end('{"type":"answer","speaker":"GPT","text":"result"}\n{"type":"done"}\n'),80);});
+  let cookie=await f.login();const id=randomUUID(),body={id,type:'meeting',request:{roomId:'test-room',history:[{speaker:'사용자',text:'test'}],mode:'demo',workflow:'discuss'}};
+  assert.equal((await f.request('/api/jobs',{cookie,body})).status,202);assert.equal((await f.request('/api/jobs',{cookie,body})).status,200);
+  assert.equal((await f.request('/api/jobs',{cookie,body:{...body,request:{different:true}}})).status,409);
+  assert.equal((await f.request('/api/jobs',{cookie,body:{...body,id:randomUUID()}})).status,409);
+  const result=await eventually(async()=>{const job=await (await f.request('/api/jobs/'+id,{cookie})).json();return job.status==='done'&&job;});assert.equal(calls,1);assert.equal(result.events[0].text,'result');assert.equal(result.history[0].text,'test');
+  assert.deepEqual((await (await f.request('/api/jobs/'+id+'?after=1',{cookie})).json()).events,[{type:'done'}]);
+  await f.restart();cookie=await f.login();assert.equal((await (await f.request('/api/jobs/'+id,{cookie})).json()).status,'done');
+});
+test('remote cancellation aborts the running local request and preserves prior events',async t=>{
+  let closed=false;const f=await workerFixture(t,(req,res)=>{res.writeHead(200,{'Content-Type':'application/x-ndjson'});res.write('{"type":"answer","text":"partial"}\n');res.on('close',()=>{closed=true;});});
+  const cookie=await f.login(),id=randomUUID();await f.request('/api/jobs',{cookie,body:{id,type:'meeting',request:{roomId:'test'}}});
+  await eventually(async()=>{const job=await (await f.request('/api/jobs/'+id,{cookie})).json();return job.events.length;});
+  assert.equal((await f.request('/api/jobs/'+id+'/cancel',{cookie,body:{}})).status,200);
+  const result=await eventually(async()=>{const job=await (await f.request('/api/jobs/'+id,{cookie})).json();return job.status==='cancelled'&&job;});assert.equal(result.events[0].text,'partial');assert.equal(closed,true);
+});
+test('Vercel proxy protects origin, URL boundaries, cookie and worker registration',async t=>{
+  const env={IDEAS_BRIDGE_TOKEN:'bridge',IDEAS_PUBLIC_ORIGIN:'https://ideas.example',BLOB_STORE_ID:'fake'};let connection=null,calls=0,lastRequest;
+  const handler=createRemoteProxy({env,connectionStore:{read:async()=>connection,write:async value=>{connection=value;}},fetchImpl:async(url,options)=>{calls++;lastRequest={url:String(url),options};return new Response('{"ok":true}',{headers:{'Content-Type':'application/json'}});}});
+  const server=http.createServer(handler),url=await listen(server);t.after(()=>close(server));
+  assert.equal((await fetch(url+'/api/rooms')).status,401);assert.equal(calls,0);
+  assert.equal((await fetch(url+'/api/auth/login',{method:'POST',headers:{Origin:'https://evil.example','Content-Type':'application/json'},body:'{}'})).status,403);
+  assert.equal((await fetch(url+'/api/worker/register',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,401);
+  const register=address=>fetch(url+'/api/worker/register',{method:'POST',headers:{Authorization:'Bearer bridge','Content-Type':'application/json'},body:JSON.stringify({url:address})});
+  assert.equal((await register('https://127.0.0.1/')).status,503);assert.equal((await register('https://test-worker.trycloudflare.com')).status,200);
+  const response=await fetch(url+'/api/rooms?roomId=abc&arbitrary=bad',{headers:{Cookie:'__Host-ideas_session='+'a'.repeat(43)}});assert.equal(response.status,200);assert.equal(calls,1);assert.equal(lastRequest.url,'https://test-worker.trycloudflare.com/api/rooms?roomId=abc');assert.equal(lastRequest.options.headers.Authorization,'Bearer bridge');
+  assert.equal((await fetch(url+'/api/remote?route=../../.env')).status,404);
+  for(const address of ['http://test.trycloudflare.com','https://test.trycloudflare.com:8443','https://test.trycloudflare.com@evil.com','https://test.trycloudflare.com/path','https://test.trycloudflare.com?x=y'])assert.throws(()=>workerAddress(address));
+});

@@ -4,6 +4,9 @@
   "type": "module",
   "scripts": {
     "start": "node --env-file-if-exists=.env server.mjs",
+    "start:remote": "node --env-file-if-exists=.env remote-worker.mjs",
+    "start:service": "node --env-file-if-exists=.env scripts/remote-service.mjs",
+    "setup:tunnel": "node scripts/tunnel-tools.mjs",
     "test": "node --test tests/*.test.mjs",
     "setup:local": "node scripts/local-tools.mjs install",
     "doctor": "node --env-file-if-exists=.env scripts/local-tools.mjs doctor",
@@ -14,5 +17,8 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.8.1"
   }
 }

@@ -1,0 +1,13 @@
+import {mkdir,writeFile,chmod,rm} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+if(process.platform!=='darwin'||!['arm64','x64'].includes(process.arch))throw new Error('이 설치 스크립트는 macOS용입니다.');
+const directory=path.join(root,'.local-tools','cloudflare');await mkdir(directory,{recursive:true});
+const response=await fetch('https://api.github.com/repos/cloudflare/cloudflared/releases/latest');if(!response.ok)throw new Error('공식 릴리스 조회 실패');const release=await response.json();
+const name=`cloudflared-darwin-${process.arch==='arm64'?'arm64':'amd64'}.tgz`,asset=release.assets.find(a=>a.name===name);if(!asset||!asset.browser_download_url.startsWith('https://github.com/cloudflare/cloudflared/releases/download/'))throw new Error('공식 설치 파일을 찾지 못했습니다.');
+const download=await fetch(asset.browser_download_url);if(!download.ok)throw new Error('설치 파일 다운로드 실패');const bytes=Buffer.from(await download.arrayBuffer());
+if(asset.digest?.startsWith('sha256:')&&createHash('sha256').update(bytes).digest('hex')!==asset.digest.slice(7))throw new Error('설치 파일 검증 실패');
+const archive=path.join(directory,name);await writeFile(archive,bytes);execFileSync('tar',['-xzf',archive,'-C',directory,'cloudflared']);await chmod(path.join(directory,'cloudflared'),0o755);await rm(archive);console.log(execFileSync(path.join(directory,'cloudflared'),['--version'],{encoding:'utf8'}).trim());

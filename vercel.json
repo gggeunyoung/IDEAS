@@ -2,8 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "buildCommand": "npm run build:static",
-  "installCommand": "",
+  "installCommand": "npm ci",
   "outputDirectory": "dist",
+  "functions": {"api/remote.js": {"maxDuration": 30}},
+  "rewrites": [{"source": "/api/:route*", "destination": "/api/remote?route=:route*"}],
   "headers": [
     {
       "source": "/(.*)",

@@ -7,4 +7,4 @@ await rm(output,{recursive:true,force:true});await mkdir(output,{recursive:true}
 const html=await readFile(path.join(root,'public','index.html'),'utf8');
 await writeFile(path.join(output,'index.html'),html.replace('<head>','<head><meta name="ideas-hosting" content="static">'));
 for(const name of ['app.js','style.css'])await copyFile(path.join(root,'public',name),path.join(output,name));
-console.log('Static web output: dist (AI worker not connected)');
+console.log('Web output: dist (remote APIs are deployed separately from api/)');
