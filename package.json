@@ -1,0 +1,18 @@
+{
+  "name": "ideas-roundtable",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "setup:local": "node scripts/local-tools.mjs install",
+    "doctor": "node --env-file-if-exists=.env scripts/local-tools.mjs doctor",
+    "login:gpt": "node scripts/local-tools.mjs gpt",
+    "login:claude": "node scripts/local-tools.mjs claude",
+    "login:gemini": "node scripts/local-tools.mjs gemini",
+    "build:static": "node scripts/build-static.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

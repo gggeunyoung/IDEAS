@@ -1,0 +1,10 @@
+import {mkdir,readFile,writeFile,copyFile,rm} from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const output=path.join(root,'dist');
+await rm(output,{recursive:true,force:true});await mkdir(output,{recursive:true});
+const html=await readFile(path.join(root,'public','index.html'),'utf8');
+await writeFile(path.join(output,'index.html'),html.replace('<head>','<head><meta name="ideas-hosting" content="static">'));
+for(const name of ['app.js','style.css'])await copyFile(path.join(root,'public',name),path.join(output,name));
+console.log('Static web output: dist (AI worker not connected)');
