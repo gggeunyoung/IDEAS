@@ -10,11 +10,12 @@ export function goalBudget(value={}){
   if(!Number.isInteger(minutes)||minutes<10||minutes>120||!Number.isInteger(maxCalls)||maxCalls<4||maxCalls>24)throw new Error('목표 실행 예산은 10~120분, AI 호출 4~24회입니다.');
   return {minutes,maxCalls};
 }
-export const reviewSchema={type:'object',additionalProperties:false,required:['verdict','summary','remaining','fieldChecks'],properties:{verdict:{type:'string',enum:['continue','complete','field_pending','blocked']},summary:{type:'string'},remaining:{type:'array',items:{type:'string'}},fieldChecks:{type:'array',items:{type:'string'}}}};
+export const reviewSchema={type:'object',additionalProperties:false,required:['verdict','summary','remaining','fieldChecks','suggestions'],properties:{verdict:{type:'string',enum:['continue','complete','field_pending','blocked']},summary:{type:'string'},remaining:{type:'array',items:{type:'string'}},fieldChecks:{type:'array',items:{type:'string'}},suggestions:{type:'array',items:{type:'string'}}}};
 function parseReview(text){
   const r=JSON.parse(text);
   if(!['continue','complete','field_pending','blocked'].includes(r.verdict)||typeof r.summary!=='string'||r.summary.length>3000||!['remaining','fieldChecks'].every(k=>Array.isArray(r[k])&&r[k].length<=20&&r[k].every(s=>typeof s==='string'&&s.length<=1500)))throw new Error('검토 결과 형식이 올바르지 않습니다.');
-  return r;
+  r.suggestions??=[];if(!Array.isArray(r.suggestions)||r.suggestions.length>20||r.suggestions.some(s=>typeof s!=='string'||s.length>1500))throw new Error('권장 개선 형식이 올바르지 않습니다.');
+  const optional=s=>/^\s*\((?:권장|후속|Non-blocking)\)/i.test(s);r.suggestions.push(...r.remaining.filter(optional));r.remaining=r.remaining.filter(s=>!optional(s));return r;
 }
 function sandboxProfile(workspace,nodePath){
   const q=JSON.stringify;
@@ -69,9 +70,9 @@ export async function runGoalWorkflow(request,emit,{env=process.env,invokeLocal=
         progress(`구현 ${cycle}차 실제 검사: ${lastVerification.passed?'통과':'미통과'}${lastVerification.hasTests?'':' · 자동 테스트 없음'}\n${lastVerification.records.map(r=>`${r.command} → 종료 코드 ${r.code}`).join('\n')}`);
         if(calls>=budget.maxCalls){feedback='구현과 검사 후 호출 예산 도달: 다른 AI 검토가 남았습니다.';break;}
         const reviewer=request.participants.find(p=>p!==request.writer);
-        const review=await call(reviewer,'review',{system:base,user:`목표:\n${goal}\n\n작성자가 만든 실제 파일:\n${bundleText(bundle)}\n\n서버가 실행한 검증 결과:\n${JSON.stringify(lastVerification)}\n\n작성자를 독립적으로 검토하세요. 코드와 테스트가 요청한 최소 결과를 충족하는지 확인하고, 남은 구현 문제를 구체적으로 지적하세요. 장비 질문이 생겨도 그 답 없이 가능한 구현이 남았으면 continue입니다. 완료 기준을 테스트가 실제로 검증하는지 확인하세요. 코드가 준비되고 실제 카메라/사람 등 현장 실험만 남았으면 field_pending입니다. 테스트가 없거나 실패했으면 complete/field_pending으로 판단하지 마세요. blocked는 사람이 없어서 정말 진행할 수 없고 다른 가능한 작업도 없을 때만 사용하세요. JSON으로 verdict(continue/complete/field_pending/blocked), summary, remaining(미완료 구현), fieldChecks(현장 검증 목록)를 반환하세요.`},reviewSchema);
+        const review=await call(reviewer,'review',{system:base,user:`목표:\n${goal}\n\n작성자가 만든 실제 파일:\n${bundleText(bundle)}\n\n서버가 실행한 검증 결과:\n${JSON.stringify(lastVerification)}\n\n작성자를 독립적으로 검토하세요. 코드와 테스트가 요청한 최소 결과를 충족하는지 확인하고, 남은 구현 문제를 구체적으로 지적하세요. 장비 질문이 생겨도 그 답 없이 가능한 구현이 남았으면 continue입니다. 완료 기준을 테스트가 실제로 검증하는지 확인하세요. 코드가 준비되고 실제 카메라/사람 등 현장 실험만 남았으면 field_pending입니다. 테스트가 없거나 실패했으면 complete/field_pending으로 판단하지 마세요. blocked는 사람이 없어서 정말 진행할 수 없고 다른 가능한 작업도 없을 때만 사용하세요. JSON으로 verdict(continue/complete/field_pending/blocked), summary, remaining(현재 최소 목표를 막는 필수 미완료 구현만), fieldChecks(현장 검증 목록), suggestions(선택적 개선 및 목표 밖 후속 기능)를 반환하세요. 권장 개선이나 이번 범위 밖 조향/4인 기능을 remaining에 넣어 불필요한 반복을 만들지 마세요. JSON의 설명과 목록은 모두 한국어로 작성하세요.`},reviewSchema);
         lastReview=parseReview(review.text);failures=0;feedback=JSON.stringify({review:lastReview,verification:lastVerification});
-        emit({type:'answer',phase:'review',round:cycle,mode:'subscription',...review,text:`${lastReview.summary}\n\n미완료 구현: ${lastReview.remaining.join('; ')||'없음'}\n현장 확인: ${lastReview.fieldChecks.join('; ')||'없음'}`});
+        emit({type:'answer',phase:'review',round:cycle,mode:'subscription',...review,text:`${lastReview.summary}\n\n미완료 구현: ${lastReview.remaining.join('; ')||'없음'}\n현장 확인: ${lastReview.fieldChecks.join('; ')||'없음'}\n권장 개선: ${lastReview.suggestions.join('; ')||'없음'}`});
         await state();
         if(lastVerification.passed&&lastReview.remaining.length===0&&['complete','field_pending'].includes(lastReview.verdict)){status=lastReview.fieldChecks.length?'field_pending':lastReview.verdict;break;}
         blockedCount=lastReview.verdict==='blocked'?blockedCount+1:0;

@@ -30,6 +30,9 @@ test('review cannot claim completion after failed/missing tests; budget exhausti
   await runGoalWorkflow({...request,budget:{minutes:10,maxCalls:4}},e=>events.push(e),{deliverableDir:root,verify:async()=>({passed:false,hasTests:false,records:[]}),invokeLocal:async(id)=>answer(id,id==='gpt'?bundle(++n):review('complete'))});
   const end=events.findLast(e=>e.type==='goal');assert.equal(end.status,'budget_exhausted');assert.equal(end.calls,4);assert.equal(n,2);assert.ok((await readFile(path.join(root,end.id,'final','motion.mjs'),'utf8')).includes('n=2'));
 }));
+test('optional improvements do not consume the budget after the minimum goal is ready',async()=>withRoot(async root=>{
+  const events=[];let calls=0;await runGoalWorkflow(request,e=>events.push(e),{deliverableDir:root,verify:pass,invokeLocal:async id=>{calls++;return answer(id,id==='gpt'?bundle(1):review('field_pending',['(후속) 4인 경쟁','(권장) 색상 개선'],['두 사람 현장 측정']));}});assert.equal(calls,2);assert.equal(events.findLast(e=>e.type==='goal').status,'field_pending');assert.match(events.find(e=>e.phase==='review'&&e.type==='answer').text,/권장 개선/);
+}));
 test('repeated CLI failures stop after three attempts and keep an honest failure record',async()=>withRoot(async root=>{
   const events=[];let calls=0;await runGoalWorkflow(request,e=>events.push(e),{deliverableDir:root,verify:pass,invokeLocal:async()=>{calls++;throw new Error('account limit');}});
   assert.equal(calls,3);const end=events.findLast(e=>e.type==='goal');assert.equal(end.status,'failed');assert.match(end.text,/생성되지 않음/);assert.equal(JSON.parse(await readFile(path.join(root,end.id,'manifest.json'),'utf8')).status,'failed');
