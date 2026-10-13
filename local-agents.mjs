@@ -116,7 +116,8 @@ export async function localStatus({env=process.env,runner=runProcess}={}) {
   }));
 }
 
-export async function callLocalAgent(id,prompt,{env=process.env,signal,runner=runProcess,webSearch=false,outputSchema,maxChars=1500}={}) {
+export async function callLocalAgent(id,prompt,{env=process.env,signal,runner=runProcess,webSearch=false,outputSchema,maxChars=1500,timeoutMs}={}) {
+  if(timeoutMs!=null&&(!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>600000))throw new Error('CLI 호출 제한 시간이 올바르지 않습니다.');
   const p=catalog.find(p=>p.id===id);if(!p)throw new Error('알 수 없는 참가자입니다.');
   if(id==='gemini')throw new Error('Google 개인 계정의 Gemini CLI 지원이 종료됐습니다. 구독 연결은 Antigravity CLI로 전환해야 합니다. API로 대체하지 않았습니다.');
   const directory=await mkdtemp(path.join(tmpdir(),'ideas-agent-'));
@@ -131,7 +132,7 @@ export async function callLocalAgent(id,prompt,{env=process.env,signal,runner=ru
       if(id==='gpt'){const schemaPath=path.join(directory,'output-schema.json');await writeFile(schemaPath,JSON.stringify(outputSchema),{mode:0o600});args.splice(args.length-1,0,'--output-schema',schemaPath);}
       else{args.push('--json-schema',JSON.stringify(outputSchema));args[args.indexOf('--max-turns')+1]='6';}
     }
-    const result=await runner(command,args,{cwd:directory,env:clean,input:`${prompt.system}\n\n최종 답변은 최대 ${maxChars}자. ${toolInstruction}\n\n${prompt.user}`,signal,timeout:outputSchema?180000:webSearch?120000:90000});
+    const result=await runner(command,args,{cwd:directory,env:clean,input:`${prompt.system}\n\n최종 답변은 최대 ${maxChars}자. ${toolInstruction}\n\n${prompt.user}`,signal,timeout:timeoutMs??(outputSchema?180000:webSearch?120000:90000)});
     if(result.code!==0)throw new Error(`${p.name} CLI 호출 실패. 계정 로그인·구독 한도·CLI 설정을 확인하세요. API로 대체하지 않았습니다.`);
     const parsed=parseLocalAnswer(id,result.stdout);
     if(outputSchema&&id==='gpt'){const items=result.stdout.trim().split('\n').flatMap(line=>{try{return [JSON.parse(line)];}catch{return [];}});parsed.text=items.filter(e=>e.type==='item.completed'&&e.item?.type==='agent_message').at(-1)?.item.text||parsed.text;}

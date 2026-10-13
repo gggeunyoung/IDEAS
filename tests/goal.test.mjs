@@ -6,6 +6,8 @@ import path from 'node:path';
 import {runGoalWorkflow,verifyGoalBundle,goalBudget} from '../goal-workflow.mjs';
 import {validateRequest} from '../room.mjs';
 import {createServer} from '../server.mjs';
+import {createPreviewServer} from '../scripts/preview-server.mjs';
+import {createDeliverable,saveVersion} from '../deliverables.mjs';
 const request={mode:'subscription',workflow:'goal',participants:['gpt','claude'],writer:'gpt',review:true,history:[{speaker:'사용자',text:'동작 감지 시제품과 테스트를 만들어줘'}],budget:{minutes:10,maxCalls:6}};
 const bundle=n=>({summary:`실제 구현 ${n}`,files:[{path:'motion.mjs',content:`export const n=${n};`},{path:'motion.test.mjs',content:`import {n} from './motion.mjs';import assert from 'node:assert/strict';assert.equal(n,${n});`}]});
 const review=(verdict,remaining=[],fieldChecks=[])=>({verdict,summary:'파일과 서버 검사 결과 검토',remaining,fieldChecks});
@@ -19,7 +21,7 @@ test('goal budget and participant validation rejects invalid/unbounded execution
 });
 test('actual files and test feedback reach other provider; remaining work triggers another implementation',async()=>withRoot(async root=>{
   const events=[],calls=[];let cycle=0;
-  await runGoalWorkflow(request,e=>events.push(e),{deliverableDir:root,verify:async(bundle,dir)=>{assert.match(await readFile(path.join(dir,'motion.mjs'),'utf8'),/export const n/);return pass();},invokeLocal:async(id,prompt)=>{calls.push({id,prompt});return answer(id,id==='gpt'?bundle(++cycle):review(cycle===1?'continue':'field_pending',cycle===1?['오인식 대조군 추가']:[],cycle===1?[]:['실제 웹캠 두 사람 측정']));}});
+  await runGoalWorkflow(request,e=>events.push(e),{deliverableDir:root,verify:async(bundle,dir)=>{assert.match(await readFile(path.join(dir,'motion.mjs'),'utf8'),/export const n/);return pass();},invokeLocal:async(id,prompt,options)=>{assert.ok(options.timeoutMs>180000&&options.timeoutMs<=600000);calls.push({id,prompt});return answer(id,id==='gpt'?bundle(++cycle):review(cycle===1?'continue':'field_pending',cycle===1?['오인식 대조군 추가']:[],cycle===1?[]:['실제 웹캠 두 사람 측정']));}});
   assert.equal(cycle,2);assert.deepEqual(calls.map(c=>c.id),['gpt','claude','gpt','claude']);assert.match(calls[1].prompt.user,/node --test/);assert.match(calls[2].prompt.user,/오인식/);
   const end=events.findLast(e=>e.type==='goal');assert.equal(end.status,'field_pending');const m=JSON.parse(await readFile(path.join(root,end.id,'manifest.json'),'utf8'));assert.deepEqual(m.versions,['draft','final']);assert.equal(m.status,'field_pending');assert.ok(events.some(e=>e.type==='done'));
 }));
@@ -48,4 +50,9 @@ test('HTTP goal execution persists real validation and final status in session/a
   const results=path.join(root,'results');const server=createServer({env:{},projectRoot:root,deliverableDir:results,artifactDir:path.join(root,'artifacts'),status:async()=>[{id:'gpt',ready:true},{id:'claude',ready:true}],invokeLocal:async id=>answer(id,id==='gpt'?bundle(3):review('field_pending',[],['실제 카메라 측정']))});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin=`http://127.0.0.1:${server.address().port}`;
   try{const response=await fetch(origin+'/api/meeting',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(request)});assert.equal(response.status,200);const events=(await response.text()).trim().split('\n').map(JSON.parse);assert.ok(events.some(e=>e.type==='done'));assert.equal(events.findLast(e=>e.type==='goal').status,'field_pending');const result=events.findLast(e=>e.type==='deliverable');assert.match(await (await fetch(origin+result.files[0].url)).text(),/n=3/);const session=await(await fetch(origin+'/api/session')).json();assert.ok(session.messages.some(e=>e.type==='goal'&&e.final));const artifact=events.find(e=>e.type==='artifact');assert.match(await(await fetch(origin+artifact.url)).text(),/현장 검증 대기/);}finally{await new Promise(resolve=>server.close(resolve));}
+}));
+test('prototype preview uses a separate local origin and serves only files present in the saved bundle',async()=>withRoot(async root=>{
+  const dir=path.join(root,'outputs'),id=await createDeliverable(dir,request);await saveVersion(dir,id,'final',{summary:'page',files:[{path:'index.html',content:'<!doctype html><h1>시제품</h1>'},{path:'app.mjs',content:'export const ok=true;'}]});
+  const server=createPreviewServer({registry:{resolve:async roomId=>{if(roomId!=='lab')throw new Error();return {id:'lab',root};}}});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin=`http://127.0.0.1:${server.address().port}`;
+  try{const page=await fetch(`${origin}/lab/${id}/final/index.html`);assert.equal(page.status,200);assert.match(page.headers.get('content-type'),/text\/html/);assert.match(await page.text(),/시제품/);assert.match((await fetch(`${origin}/lab/${id}/final/app.mjs`)).headers.get('content-type'),/text\/javascript/);assert.equal((await fetch(`${origin}/lab/${id}/final/..%2F.env`)).status,404);assert.equal((await fetch(`${origin}/other/${id}/final/index.html`)).status,404);assert.equal((await fetch(origin+'/api/rooms')).status,404);assert.equal((await fetch(`${origin}/lab/${id}/final/index.html`,{method:'POST'})).status,403);}finally{await new Promise(resolve=>server.close(resolve));}
 }));
