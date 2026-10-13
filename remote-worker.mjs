@@ -3,6 +3,7 @@ import {randomBytes,randomUUID,scryptSync,timingSafeEqual,createHash} from 'node
 import {mkdir,readFile,writeFile,rename,readdir} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {goalBudget} from './goal-workflow.mjs';
 
 const root=path.dirname(fileURLToPath(import.meta.url));
 const hash=value=>createHash('sha256').update(value).digest();
@@ -38,7 +39,8 @@ export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:303
     try{
       control.signal.throwIfAborted();job.status='running';await store(job);control.signal.throwIfAborted();
       const routes={meeting:'/api/meeting','connect-room':'/api/rooms','save-room':'/api/room-save'};
-      const response=await localFetch(routes[job.type],{method:'POST',body:JSON.stringify(job.request),signal:AbortSignal.any([control.signal,AbortSignal.timeout(630000)])});
+      const timeout=job.type==='meeting'&&job.request.workflow==='goal'?goalBudget(job.request.budget).minutes*60000+60000:630000;
+      const response=await localFetch(routes[job.type],{method:'POST',body:JSON.stringify(job.request),signal:AbortSignal.any([control.signal,AbortSignal.timeout(timeout)])});
       if(!response.ok){let error;try{error=(await response.json()).error;}catch{}throw new Error(error||'맥 서버가 작업을 거절했습니다.');}
       if(job.type==='meeting'){
         let buffer='';const decoder=new TextDecoder();for await(const chunk of response.body){buffer+=decoder.decode(chunk,{stream:true});let index;while((index=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,index);buffer=buffer.slice(index+1);if(line){job.events.push(JSON.parse(line));await store(job);}}}

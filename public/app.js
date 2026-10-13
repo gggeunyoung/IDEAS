@@ -10,12 +10,13 @@ function artifactLink(artifact){
 try{artifactLink(JSON.parse(localStorage.getItem('ideas-artifact')||'null'));}catch{}
 let preferences={};
 try{preferences=JSON.parse(localStorage.getItem('ideas-settings')||'{}')||{};}catch{}
-for(const [id,key,values] of [['mode','mode',['subscription','live','demo']],['workflow','workflow',['discuss','draft','files']]])if(values.includes(preferences[key]))$(id).value=preferences[key];
+for(const [id,key,values] of [['mode','mode',['subscription','live','demo']],['workflow','workflow',['discuss','draft','files','goal']]])if(values.includes(preferences[key]))$(id).value=preferences[key];
 if(typeof preferences.review==='boolean')$('review').checked=preferences.review;
 if(typeof preferences.webSearch==='boolean')$('web-search').checked=preferences.webSearch;
 function savePreferences(){try{localStorage.setItem('ideas-settings',JSON.stringify({mode:$('mode').value,workflow:$('workflow').value,writer:$('writer').value,review:$('review').checked,webSearch:$('web-search').checked}));}catch{}}
 
-const phases={plan:'작업 계획',draft:'파일 초안',review:'다른 AI 검토',final:'검토 반영 수정본'};
+const goalLabels={complete:'완료',field_pending:'현장 검증 대기',blocked:'해결 장애',budget_exhausted:'실행 예산 도달',stalled:'진전 없이 반복',cancelled:'사용자 중단',failed:'실행 실패',goal_running:'목표 실행 중'};
+const phases={implement:'실제 구현',execute:'실제 작업 상태',plan:'작업 계획',draft:'파일 초안',review:'다른 AI 검토',final:'검토 반영 수정본'};
 const stage=m=>phases[m.phase]|| (m.round===3?'초안 검토':m.round===2?(m.workflow==='draft'?'작성자 초안':'상호 검토'):'독립 제안');
 function save(){try{localStorage.setItem('ideas-room:'+currentRoom,JSON.stringify(messages));}catch{$('status').textContent='브라우저 저장에 실패했습니다. 회의록을 내보내세요.';}}
 function renderText(root,text){
@@ -46,14 +47,15 @@ function render(){
   $('log').scrollTop=$('log').scrollHeight;
 }
 function searchState(){$('web-search').disabled=running||$('mode').value!=='subscription';$('search-hint').textContent=$('mode').value==='subscription'?'조사가 필요하면 검색합니다. 검색어는 외부 검색 서비스로 전송됩니다.':'웹 검색 연결은 현재 기존 구독 모드에서 사용할 수 있습니다.';}
-function state(active){running=active;for(const id of ['send','clear','mode','review','workflow','writer','refresh','refresh-results','home','save-project','logout','resume-job'])$(id).disabled=active;searchState();document.querySelectorAll('[name=participant],[name=file]').forEach(e=>e.disabled=active);$('stop').hidden=!active;}
+function state(active){running=active;for(const id of ['send','clear','mode','review','workflow','writer','refresh','refresh-results','home','save-project','logout','resume-job','goal-minutes','goal-calls'])$(id).disabled=active;searchState();document.querySelectorAll('[name=participant],[name=file]').forEach(e=>e.disabled=active);$('stop').hidden=!active;}
 function selected(){return [...document.querySelectorAll('[name=participant]:checked')].map(e=>e.value);}
 function updateWriter(){
   const previous=$('writer').value||preferences.writer;$('writer').replaceChildren();
   for(const id of selected()){const option=document.createElement('option');option.value=id;option.textContent=config.participants.find(p=>p.id===id).name;$('writer').append(option);}
   if(selected().includes(previous))$('writer').value=previous;
-  $('writer-field').hidden=!['draft','files'].includes($('workflow').value);
-  $('limits').textContent=$('workflow').value==='files'?'구독 참가자 2명 · 최대 5회 호출 · 검토 필수. 파일은 별도 폴더에 저장하며 원본에 적용하지 않습니다.':'한 번에 최대 6회 호출. 자동 반복하지 않습니다. 원본 파일은 수정하지 않습니다.';
+  $('writer-field').hidden=!['draft','files','goal'].includes($('workflow').value);
+  $('goal-budget').hidden=$('workflow').value!=='goal';
+  $('limits').textContent=$('workflow').value==='goal'?'목표 실행은 설정한 시간·호출 예산 안에서 반복합니다. 실제 테스트와 다른 AI 검토를 거쳐 종료 상태를 남깁니다.':$('workflow').value==='files'?'구독 참가자 2명 · 최대 5회 호출 · 검토 필수. 파일은 별도 폴더에 저장하며 원본에 적용하지 않습니다.':'한 번에 최대 6회 호출. 자동 반복하지 않습니다. 원본 파일은 수정하지 않습니다.';
 }
 function showParticipants(preserve=false){
   const prior=selected(),mode=$('mode').value,people=mode==='subscription'?config.local:config.participants;
@@ -80,7 +82,7 @@ async function refreshResults(){
     if(!data.items.length){$('deliverables').textContent='아직 저장된 파일이 없습니다.';return;}
     for(const item of data.items){
       const card=document.createElement('details');card.className='result';const title=document.createElement('summary');title.textContent=item.task.slice(0,70);card.append(title);
-      const info=document.createElement('p');const actor=id=>config?.participants.find(p=>p.id===id)?.name||id;info.textContent=`작성: ${actor(item.writer)} · 검토: ${(item.participants||[]).filter(id=>id!==item.writer).map(actor).join(', ')}\n`+new Date(item.createdAt).toLocaleString('ko-KR')+' · '+(item.status==='revised'?'검토 반영 수정본 · 재검토 전':item.status==='draft'?'검토 전 초안':'작성 시작');card.append(info);
+      const info=document.createElement('p');const actor=id=>config?.participants.find(p=>p.id===id)?.name||id;info.textContent=`작성: ${actor(item.writer)} · 검토: ${(item.participants||[]).filter(id=>id!==item.writer).map(actor).join(', ')}\n`+new Date(item.createdAt).toLocaleString('ko-KR')+' · '+(goalLabels[item.status]|| (item.status==='revised'?'검토 반영 수정본 · 재검토 전':item.status==='draft'?'검토 전 초안':'작성 시작'));card.append(info);
       for(const version of item.versions){
         const button=document.createElement('button');button.className='secondary';button.textContent=(version==='final'?'수정본':'초안')+' 파일 보기';const contents=document.createElement('div');card.append(button,contents);
         button.onclick=async()=>{
@@ -100,11 +102,12 @@ async function refreshResults(){
 
 function onEvent(e,mode,workflow){
   if(e.type==='pending')$('status').textContent=`${stage({...e,workflow})} 진행 중 · ${e.speaker}`;
-  if(e.type==='answer'||e.type==='error'){messages.push({...e,mode,workflow,error:e.type==='error'});save();render();}
+  if(e.type==='answer'||e.type==='error'||e.type==='goal'){messages.push({...e,mode,workflow,error:e.type==='error'});save();render();}
   if(e.type==='notice')$('status').textContent=e.text;
+  if(e.type==='goal')$('status').textContent=e.final?`목표 실행 종료 · ${goalLabels[e.status]||e.status}`:e.text;
   if(e.type==='deliverable'){refreshResults();}
   if(e.type==='artifact'){artifactLink(e);try{localStorage.setItem('ideas-artifact:'+currentRoom,JSON.stringify({id:e.id}));}catch{}}
-  if(e.type==='done')$('status').textContent='회의가 끝났습니다. 결과물을 다운로드하거나 다음 방향을 입력하세요.';
+  if(e.type==='done'){$('status').textContent=workflow==='goal'?`목표 실행 종료 · ${goalLabels[messages.findLast(m=>m.type==='goal'&&m.final)?.status]||'결과 확인 필요'}`:'회의가 끝났습니다. 결과물을 다운로드하거나 다음 방향을 입력하세요.';}
 }
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function remoteJson(route,options){const response=await fetch(route,options);let data;try{data=await response.json();}catch{throw new Error('원격 연결 응답을 읽지 못했습니다. 잠시 후 다시 조회하세요.');}if(!response.ok){if(response.status===401)showLogin();const error=new Error(data.error||'원격 요청에 실패했습니다.');error.status=response.status;throw error;}return data;}
@@ -126,20 +129,20 @@ $('composer').addEventListener('submit',async event=>{
   event.preventDefault();if(running||!config)return;
   const text=$('message').value.trim(),ids=selected(),mode=$('mode').value,workflow=$('workflow').value;
   if(!text)return;
-  if(workflow==='files'&&(mode!=='subscription'||ids.length!==2||!$('review').checked)){$('status').textContent='파일 협업은 구독 참가자 2명을 선택하고 다른 참가자의 검토를 켜세요.';return;}
+  if(['files','goal'].includes(workflow)&&(mode!=='subscription'||ids.length!==2||!$('review').checked)){$('status').textContent='파일 협업은 구독 참가자 2명을 선택하고 다른 참가자의 검토를 켜세요.';return;}
   if(!ids.length){$('status').textContent='참가자를 한 명 이상 선택하세요.';return;}
   const people=mode==='subscription'?config.local:config.participants;
   if(mode!=='demo'&&ids.some(id=>!people.find(p=>p.id===id).ready)){$('status').textContent=mode==='subscription'?'선택한 참가자의 계정으로 CLI에 로그인하고 상태를 새로고침하세요.':'선택한 참가자의 API 키를 .env에 설정하고 서버를 재시작하세요.';return;}
-  const history=messages.filter(m=>!m.error&&m.mode!=='demo').map(m=>({speaker:m.speaker,text:m.text}));history.push({speaker:'사용자',text});
+  const history=messages.filter(m=>!m.error&&m.mode!=='demo'&&(m.type!=='goal'||m.final)).map(m=>({speaker:m.speaker,text:m.text}));history.push({speaker:'사용자',text});
   if(history.length>100||history.reduce((n,m)=>n+m.text.length,0)>24000){$('status').textContent='대화가 길어졌습니다. 회의록을 내보낸 후 새 회의를 시작하세요.';return;}
   const files=[...document.querySelectorAll('[name=file]:checked')].map(e=>e.value);
   if(files.length>8){$('status').textContent='자료 파일은 최대 8개입니다.';return;}
   controller=new AbortController();state(true);$('status').textContent=mode==='subscription'?'구독 CLI를 호출합니다. 앱 화면을 조작하지 않습니다.':mode==='live'?'별도 과금 API 호출을 시작합니다.':'무료 데모를 시작합니다.';
   let failures=0,lastNotice='';$('artifact').hidden=true;
   try{
-    const request={roomId:currentRoom,history,participants:ids,mode,review:$('review').checked,workflow,writer:$('writer').value,files,webSearch:mode==='subscription'&&$('web-search').checked};
+    const request={roomId:currentRoom,history,participants:ids,mode,review:$('review').checked,workflow,writer:$('writer').value,files,webSearch:mode==='subscription'&&$('web-search').checked,...(workflow==='goal'?{budget:{minutes:Number($('goal-minutes').value),maxCalls:Number($('goal-calls').value)}}:{})};
     if(!localServer){
-      messages.push({speaker:'사용자',text,mode,workflow});save();render();$('message').value='';$('status').textContent='맥에서 회의를 시작합니다. 토론은 보통 1~5분, 파일 협업은 최대 10분 걸릴 수 있습니다.';
+      messages.push({speaker:'사용자',text,mode,workflow});save();render();$('message').value='';$('status').textContent=workflow==='goal'?`맥에서 목표 실행 시작 · 최대 ${request.budget.minutes}분 / ${request.budget.maxCalls}회. 웹을 닫아도 맥에서 진행하며 나중에 다시 조회할 수 있습니다.`:'맥에서 회의를 시작합니다. 토론은 보통 1~5분, 파일 협업은 최대 10분 걸릴 수 있습니다.';
       await submitRemoteJob('meeting',request,job=>{for(const e of job.events){if(e.type==='error')failures++;if(e.type==='notice')lastNotice=e.text;onEvent(e,mode,workflow);}});
       if(failures||lastNotice)$('status').textContent=`회의 종료${failures?` · 실패한 응답 ${failures}개`:''}${lastNotice?` · ${lastNotice}`:''}`;return;
     }
@@ -156,7 +159,7 @@ $('composer').addEventListener('submit',async event=>{
 $('stop').onclick=async()=>{if(localServer)controller?.abort();else if(remoteJob){try{await remoteJson(`/api/jobs/${remoteJob}/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});$('status').textContent='맥에 중단을 요청했습니다.';}catch(error){$('status').textContent=error.message;}}};
 $('refresh-results').onclick=refreshResults;
 $('refresh').onclick=()=>refresh(false);
-$('workflow').onchange=()=>{if($('workflow').value==='files')$('review').checked=true;updateWriter();};
+$('workflow').onchange=()=>{if(['files','goal'].includes($('workflow').value))$('review').checked=true;updateWriter();};
 for(const id of ['mode','workflow','writer','review','web-search'])$(id).addEventListener('change',savePreferences);
 $('mode').onchange=()=>{if(config)showParticipants();$('status').textContent=$('mode').value==='subscription'?'기존 계정으로 로그인한 CLI를 사용합니다. API 키를 사용하지 않습니다.':$('mode').value==='demo'?'무료 데모 · 실제 AI 답변을 생성하지 않습니다.':'API 모드 · 대화와 선택한 자료를 전송하고 별도 과금합니다.';};
 $('example').onclick=()=>{$('message').value='나와 AI 동료들이 일주일 동안 함께 시도할 생산적인 실험 3개를 제안해줘. 하루에 30분만 쓸 수 있어.';$('message').focus();};

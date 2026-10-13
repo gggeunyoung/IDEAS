@@ -9,6 +9,7 @@ import {projectFiles,snapshotFiles,saveArtifact,readArtifact} from './project-co
 import {listDeliverables,readDeliverable} from './deliverables.mjs';
 import {createRoomRegistry,gitState,loadSession,saveSession} from './room-registry.mjs';
 import {saveRoomGit} from './room-git.mjs';
+import {goalBudget} from './goal-workflow.mjs';
 const appRoot=path.dirname(fileURLToPath(import.meta.url));
 export function createServer({env=process.env,invoke,invokeLocal,status=localStatus,projectRoot=env.IDEAS_PROJECT_ROOT||appRoot,artifactDir=path.join(appRoot,'artifacts'),deliverableDir=path.join(appRoot,'deliverables'),roomRegistryFile=path.join(projectRoot,'.runtime','rooms.json'),roomHome}={}){
   let busy=false;
@@ -70,11 +71,11 @@ export function createServer({env=process.env,invoke,invokeLocal,status=localSta
       const saved=await loadSession(room.root);
       const messages=request.history.map((m,index)=>{const previous=saved[index];return previous&&previous.speaker===m.speaker&&previous.text===m.text?previous:{...m,mode:request.mode,workflow:request.workflow};});await saveSession(room.root,messages);
       res.on('close',()=>{if(!res.writableEnded)controller.abort();});res.writeHead(200,{'Content-Type':'application/x-ndjson; charset=utf-8'});
-      const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(request.workflow==='files'?600000:request.mode==='subscription'?300000:120000)]);
+      const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(request.workflow==='goal'?goalBudget(request.budget).minutes*60000+30000:request.workflow==='files'?600000:request.mode==='subscription'?300000:120000)]);
       const events=[];let completed=false;
       const emit=event=>{if(!res.destroyed)res.write(JSON.stringify(event)+'\n');};
       await runMeeting(request,event=>{
-        events.push(event);if(['answer','error'].includes(event.type)){messages.push({...event,mode:request.mode,workflow:request.workflow,error:event.type==='error'});const snapshot=JSON.parse(JSON.stringify(messages));persist=persist.then(()=>saveSession(room.root,snapshot));}
+        events.push(event);if(['answer','error','goal'].includes(event.type)){messages.push({...event,mode:request.mode,workflow:request.workflow,error:event.type==='error'});const snapshot=JSON.parse(JSON.stringify(messages));persist=persist.then(()=>saveSession(room.root,snapshot));}
         if(event.type==='deliverable')event={...event,url:scopeUrl(event.url,room),files:event.files.map(f=>({...f,url:scopeUrl(f.url,room)}))};
         if(event.type==='done')completed=true;else emit(event);
       },{env,invoke,invokeLocal,signal,context,deliverableDir:dirs.deliverableDir});
@@ -84,6 +85,6 @@ export function createServer({env=process.env,invoke,invokeLocal,status=localSta
     }catch(error){if(!res.headersSent)send(400,{error:error instanceof SyntaxError?'요청 형식을 확인하세요.':error.message});else if(!res.destroyed)res.end(JSON.stringify({type:'notice',text:'작업을 완료하지 못했습니다. 생성된 답변은 저장된 대화나 내보내기로 확인하세요.'})+'\n');}
     finally{try{await persist;}catch{}if(acquired)busy=false;}
   });
-  server.requestTimeout=630000;return server;
+  server.requestTimeout=7230000;return server;
 }
 if(process.argv[1]===fileURLToPath(import.meta.url)){const port=Number(process.env.PORT||3030);createServer().listen(port,'127.0.0.1',()=>console.log(`IDEAS 회의실: http://127.0.0.1:${port}`));}

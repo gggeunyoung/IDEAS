@@ -1,10 +1,11 @@
 import {catalog,promptFor,callProvider} from './providers.mjs';
 import {callLocalAgent} from './local-agents.mjs';
 import {runFileWorkflow} from './agent-workflow.mjs';
+import {runGoalWorkflow,goalBudget} from './goal-workflow.mjs';
 
 export function validateRequest(value) {
   if(!value || !Array.isArray(value.history) || !value.history.length || value.history.length>100) throw new Error('대화 기록을 1~100개로 보내세요.');
-  const speakers=new Set(['사용자',...catalog.map(p=>p.name)]);
+  const speakers=new Set(['사용자','실행기',...catalog.map(p=>p.name)]);
   if(value.history.some(m=>!m||!speakers.has(m.speaker)||typeof m.text!=='string'||!m.text.trim())) throw new Error('잘못된 대화 기록입니다.');
   if(value.history.at(-1).speaker!=='사용자') throw new Error('마지막 메시지는 사용자 메시지여야 합니다.');
   if(value.history.reduce((sum,m)=>sum+m.text.length,0)>24000) throw new Error('대화가 24,000자를 넘었습니다. 회의록을 내보낸 후 새 회의를 시작하세요.');
@@ -13,15 +14,17 @@ export function validateRequest(value) {
   if(typeof value.review!=='boolean') throw new Error('검토 여부를 선택하세요.');
   if(value.webSearch!=null&&typeof value.webSearch!=='boolean')throw new Error('웹 검색 여부를 선택하세요.');
   if(value.webSearch&&value.mode!=='subscription')throw new Error('현재 웹 검색은 기존 구독 모드에서 지원합니다.');
-  if(value.workflow!=null&&!['discuss','draft','files'].includes(value.workflow)) throw new Error('작업 방식을 선택하세요.');
-  if(['draft','files'].includes(value.workflow)&&!value.participants.includes(value.writer)) throw new Error('초안 작성자를 참가자 중에서 선택하세요.');
+  if(value.workflow!=null&&!['discuss','draft','files','goal'].includes(value.workflow)) throw new Error('작업 방식을 선택하세요.');
+  if(['draft','files','goal'].includes(value.workflow)&&!value.participants.includes(value.writer)) throw new Error('초안 작성자를 참가자 중에서 선택하세요.');
   if(value.workflow==='files'&&(value.mode!=='subscription'||value.participants.length!==2||!value.review))throw new Error('파일 협업은 구독 참가자 2명과 검토 옵션이 필요합니다.');
+  if(value.workflow==='goal'){if(value.mode!=='subscription'||value.participants.length!==2||!value.review||value.participants.some(p=>!['gpt','claude'].includes(p)))throw new Error('목표 실행은 GPT·Claude 구독 참가자 2명과 검토가 필요합니다.');goalBudget(value.budget);}
   if(value.files!=null&&(!Array.isArray(value.files)||value.files.length>8||value.files.some(f=>typeof f!=='string')))throw new Error('자료 파일은 최대 8개입니다.');
   return value;
 }
 
 export async function runMeeting(request,emit,{env=process.env,invoke=callProvider,invokeLocal=callLocalAgent,signal,context='',deliverableDir}={}) {
   const {history,participants,review,mode}=validateRequest(request);
+  if(request.workflow==='goal')return runGoalWorkflow(request,emit,{env,invokeLocal,signal,context,deliverableDir});
   if(request.workflow==='files')return runFileWorkflow(request,emit,{env,invokeLocal,signal,context,deliverableDir});
   if(mode==='live'&&participants.some(id=>!env[catalog.find(p=>p.id===id).key])) throw new Error('선택한 참가자의 API 키를 모두 설정하세요.');
   const pass=async(round,reference=null,selected=null,task=null)=> {

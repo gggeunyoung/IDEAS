@@ -4,6 +4,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {prepareRemoteSecrets,createRemoteWorker} from '../remote-worker.mjs';
 import {createServer} from '../server.mjs';
+import {createPreviewServer} from './preview-server.mjs';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url))),runtime=path.join(root,'.runtime');
 const origin=process.env.IDEAS_PUBLIC_ORIGIN||'https://ideas-nine-opal.vercel.app';
 if(new URL(origin).origin!==origin||new URL(origin).protocol!=='https:')throw new Error('원격 웹 주소는 HTTPS origin이어야 합니다.');
@@ -16,6 +17,7 @@ async function ensureLocalServer(){
   finally{checkingLocal=false;}
 }
 await ensureLocalServer();
+const preview=createPreviewServer();await new Promise((resolve,reject)=>{preview.once('error',reject);preview.listen(3032,'127.0.0.1',resolve);});console.log('맥 시제품 미리보기 서버 시작 · 127.0.0.1:3032');
 const worker=await createRemoteWorker({secrets});await new Promise(resolve=>worker.listen(3031,'127.0.0.1',resolve));
 let tunnel,url,registered=false,retryTimer,registerTimer,healthTimer;
 async function register(){
@@ -29,5 +31,5 @@ function startTunnel(){
   tunnel.on('error',()=>console.log('cloudflared 실행 실패 · npm run setup:tunnel을 확인하세요.'));
   tunnel.on('exit',()=>{if(!stopping){console.log('맥 중계 연결 종료 · 5초 후 다시 연결');retryTimer=setTimeout(startTunnel,5000);}});
 }
-function stop(){if(stopping)return;stopping=true;clearTimeout(retryTimer);clearInterval(registerTimer);clearInterval(healthTimer);tunnel?.kill();worker.close();localServer?.close();}
+function stop(){if(stopping)return;stopping=true;clearTimeout(retryTimer);clearInterval(registerTimer);clearInterval(healthTimer);tunnel?.kill();worker.close();preview.close();localServer?.close();}
 process.on('SIGTERM',stop);process.on('SIGINT',stop);startTunnel();registerTimer=setInterval(()=>void register(),15000);healthTimer=setInterval(()=>{if(!stopping)void ensureLocalServer();},15000);console.log('IDEAS 원격 서비스 시작 · 맥은 켜져 있고 잠자기가 해제돼 있어야 합니다.');
