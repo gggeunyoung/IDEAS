@@ -10,6 +10,7 @@
     "service:install": "node scripts/remote-daemon.mjs install",
     "service:status": "node scripts/remote-daemon.mjs status",
     "service:remove": "node scripts/remote-daemon.mjs remove",
+    "remote:password": "node scripts/remote-password.mjs",
     "test": "node --test tests/*.test.mjs",
     "setup:local": "node scripts/local-tools.mjs install",
     "doctor": "node --env-file-if-exists=.env scripts/local-tools.mjs doctor",

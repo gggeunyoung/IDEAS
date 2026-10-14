@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,mkdir,symlink,readFile,rm} from 'node:fs/promises';
+import {mkdtemp,writeFile,mkdir,symlink,readFile,rm,utimes} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {subscriptionEnv,callLocalAgent,parseLocalAnswer,localStatus,runProcess} from '../local-agents.mjs';
+import {subscriptionEnv,callLocalAgent,parseLocalAnswer,localStatus,runProcess,executableFor} from '../local-agents.mjs';
 import {projectFiles,snapshotFiles,readArtifact} from '../project-context.mjs';
 import {runMeeting,validateRequest} from '../room.mjs';
 import {createServer} from '../server.mjs';
@@ -61,7 +61,8 @@ test('초안은 한 작성자만 만들고 모든 독립 제안 완료 후 다�
 });
 test('파일 스냅샷은 선택된 자료만 읽고 환경 파일·외부 링크·비밀정보를 거절함',async()=>fixture(async dir=>{
   await writeFile(path.join(dir,'bio.md'),'실제 이력');await writeFile(path.join(dir,'.env'),'PRIVATE=secret');await mkdir(path.join(dir,'node_modules'));await writeFile(path.join(dir,'node_modules','hidden.md'),'숨김');
-  await symlink('/etc/hosts',path.join(dir,'outside.txt'));await writeFile(path.join(dir,'bad.txt'),'-----BEGIN PRIVATE KEY-----');
+  // Windows without symlink privilege: a directory junction is still an outside link.
+  try{await symlink('/etc/hosts',path.join(dir,'outside.txt'));}catch(e){if(e.code!=='EPERM')throw e;await symlink(tmpdir(),path.join(dir,'outside.txt'),'junction');}await writeFile(path.join(dir,'bad.txt'),'-----BEGIN PRIVATE KEY-----');
   assert.deepEqual(await projectFiles(dir),['bad.txt','bio.md']);assert.match(await snapshotFiles(dir,['bio.md']),/실제 이력/);
   for(const name of ['.env','../outside.md','outside.txt','node_modules/hidden.md','bad.txt'])await assert.rejects(snapshotFiles(dir,[name]));
   assert.equal(await snapshotFiles(dir,[]),'');
@@ -110,3 +111,28 @@ test('검색 옵션은 모든 구독 회의 단계에 전달되고 API/데모에
   for(const mode of ['live','demo'])assert.throws(()=>validateRequest({...request,mode,webSearch:true}),/기존 구독 모드/);
   assert.throws(()=>validateRequest({...request,webSearch:'true'}),/웹 검색 여부/);
 });
+test('Windows는 데스크톱 앱에 포함된 최신 CLI 실행 파일을 찾고 명시 경로를 우선함',async()=>fixture(async dir=>{
+  const local=path.join(dir,'local'),roaming=path.join(dir,'roaming'),profile=path.join(dir,'profile');
+  const exe=async(file,seconds)=>{await mkdir(path.dirname(file),{recursive:true});await writeFile(file,'');await utimes(file,seconds,seconds);return file;};
+  await exe(path.join(local,'OpenAI','Codex','bin','old','codex.exe'),1000);const codex=await exe(path.join(local,'OpenAI','Codex','bin','new','codex.exe'),2000);
+  await mkdir(path.join(local,'OpenAI','Codex','bin','rg-only'),{recursive:true});
+  await exe(path.join(roaming,'Claude','claude-code','2.1.289','a1','claude.exe'),1000);const claude=await exe(path.join(roaming,'Claude','claude-code','2.1.295','b2','claude.exe'),2000);
+  const env={LOCALAPPDATA:local,APPDATA:roaming,USERPROFILE:profile};
+  assert.equal(await executableFor('gpt',env,'win32'),codex);assert.equal(await executableFor('claude',env,'win32'),claude);
+  const native=await exe(path.join(profile,'.local','bin','claude.exe'),3000);assert.equal(await executableFor('claude',env,'win32'),native);
+  assert.equal(await executableFor('claude',{...env,LOCAL_CLAUDE_BIN:'C:\custom\claude.exe'},'win32'),'C:\custom\claude.exe');
+  assert.equal(await executableFor('gpt',{},'win32'),'codex');
+}));
+test('macOS 밖에서는 목표 실행을 AI 호출 전에 거절함',{skip:process.platform==='darwin'},async()=>fixture(async dir=>{
+  let calls=0;const server=createServer({projectRoot:dir,artifactDir:path.join(dir,'a'),deliverableDir:path.join(dir,'d'),status:async()=>[{id:'gpt',ready:true},{id:'claude',ready:true}],invokeLocal:async()=>{calls++;throw new Error('호출되면 안 됨');}});
+  await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`;
+  try{
+    const response=await fetch(base+'/api/meeting',{method:'POST',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify({mode:'subscription',workflow:'goal',participants:['gpt','claude'],writer:'gpt',review:true,history:[{speaker:'사용자',text:'목표'}],budget:{minutes:10,maxCalls:4}})});
+    assert.equal(response.status,400);assert.match((await response.json()).error,/macOS/);assert.equal(calls,0);
+  }finally{server.close();}
+}));
+test('Windows Store(MSIX) Claude 앱의 패키지 전용 AppData에서도 CLI를 찾음',async()=>fixture(async dir=>{
+  const local=path.join(dir,'local');const file=path.join(local,'Packages','Claude_pzs8sxrjxfjjc','LocalCache','Roaming','Claude','claude-code','2.1.295','d2','claude.exe');
+  await mkdir(path.dirname(file),{recursive:true});await writeFile(file,'');await mkdir(path.join(local,'Packages','Other_x','LocalCache','Roaming','Claude','claude-code','9','z'),{recursive:true});
+  assert.equal(await executableFor('claude',{LOCALAPPDATA:local,APPDATA:path.join(dir,'roaming'),USERPROFILE:path.join(dir,'p')},'win32'),file);
+}));

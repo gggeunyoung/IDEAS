@@ -18,7 +18,8 @@ export function createRoomRegistry({file,defaultRoom,home=homedir()}){
     if(typeof name!=='string'||!name.trim()||name.length>80)throw new Error('회의실 이름은 1~80자입니다.');
     const canonical=repositoryUrl(repo).url;const resolved=await realpath(root),base=await realpath(home);
     if(!resolved.startsWith(base+path.sep)||resolved!==path.resolve(root)||(await lstat(root)).isSymbolicLink())throw new Error('사용자 홈 안의 실제 프로젝트 폴더를 연결하세요.');
-    if(await git(resolved,['rev-parse','--show-toplevel'])!==resolved)throw new Error('저장소 루트 폴더를 연결하세요.');
+    // Git for Windows prints C:/... while realpath returns C:\...; compare canonical paths.
+    if(await realpath(await git(resolved,['rev-parse','--show-toplevel']))!==resolved)throw new Error('저장소 루트 폴더를 연결하세요.');
     if(repositoryUrl(await git(resolved,['remote','get-url','origin'])).url!==canonical)throw new Error('폴더와 저장소의 origin이 다릅니다.');
     const rooms=await all();const existing=rooms.find(r=>r.root===resolved);if(existing)return existing;
     const room={id:createHash('sha256').update(resolved).digest('hex').slice(0,16),name:name.trim(),root:resolved,repo:canonical.replace(/\.git$/,''),kind:'project',createdAt:new Date().toISOString()};

@@ -33,6 +33,8 @@ npm run service:remove
 
 상태 로그는 .runtime/remote-service.log와 .runtime/remote-service-error.log다. 비밀번호는 .runtime/remote-login.txt를 이 맥에서 확인한다. 이 파일과 .runtime 전체를 Git이나 공유 프로젝트에 넣지 않는다.
 
+비밀번호를 직접 정하려면 워커 맥의 IDEAS 폴더에서 `npm run remote:password`를 실행해 12자 이상을 두 번 입력한다. 입력은 화면에 표시되지 않고 해시만 .runtime/remote-secrets.json에 저장되며, 자동 생성 비밀번호가 적힌 remote-login.txt는 삭제된다. Vercel 중계 키는 그대로라 재배포는 필요 없다. 원격 서비스를 다시 시작해야 적용된다(`npm run service:remove` 후 `npm run service:install`). 비밀번호를 채팅이나 문서에 적지 않는다.
+
 ## 새로운 맥 워커 설정
 
 1. Node.js 22 이상, npm ci, npm run setup:local 및 본인 GPT·Claude CLI 로그인을 준비한다.

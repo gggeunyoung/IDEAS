@@ -7,6 +7,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {createRemoteWorker,prepareRemoteSecrets} from '../remote-worker.mjs';
 import {createRemoteProxy,workerAddress} from '../remote-proxy.mjs';
+import {setRemotePassword} from '../scripts/remote-password.mjs';
 const listen=server=>new Promise(resolve=>server.listen(0,'127.0.0.1',()=>resolve(`http://127.0.0.1:${server.address().port}`)));
 const close=server=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();});
 async function workerFixture(t,handle,{initializeDirectory,...workerOptions}={}){
@@ -98,4 +99,16 @@ test('Korean JSON survives split UTF-8 bytes through proxy and worker',async t=>
   const result=await eventually(async()=>{const job=await (await f.request('/api/jobs/'+id,{cookie})).json();return job.status==='done'&&job;});assert.equal(result.result.name,'한글 뒤에 남는 대화');
   let forwarded;const proxy=http.createServer(createRemoteProxy({env:{IDEAS_BRIDGE_TOKEN:'bridge',IDEAS_WORKER_URL:'https://test.trycloudflare.com',IDEAS_PUBLIC_ORIGIN:'https://ideas.example'},fetchImpl:async(url,options)=>{forwarded=JSON.parse(options.body);return new Response('{}');}}));const proxyUrl=await listen(proxy);t.after(()=>close(proxy));
   assert.equal((await fragmentedPost(proxyUrl+'/api/auth/login',{Origin:'https://ideas.example'},{password:'한글 비밀번호'})).status,200);assert.equal(forwarded.password,'한글 비밀번호');
+});
+test('사용자가 정한 웹 비밀번호로 바꾸면 이전 비밀번호는 거절하고 중계 키는 유지함',async t=>{
+  const directory=await mkdtemp(path.join(os.tmpdir(),'ideas-remote-password-'));t.after(()=>rm(directory,{recursive:true,force:true}));
+  const before=await prepareRemoteSecrets(directory),old=(await readFile(path.join(directory,'remote-login.txt'),'utf8')).split('\n')[1];
+  for(const value of ['short',undefined,'x'.repeat(129)])await assert.rejects(setRemotePassword(value,directory));
+  await assert.rejects(setRemotePassword('my-own-password-1',path.join(directory,'missing')),/원격 인증 설정/);
+  await setRemotePassword('my-own-password-1',directory);
+  const after=await prepareRemoteSecrets(directory);assert.equal(after.bridgeToken,before.bridgeToken);assert.notEqual(after.salt,before.salt);
+  await assert.rejects(readFile(path.join(directory,'remote-login.txt')));assert.ok(!(await readFile(path.join(directory,'remote-secrets.json'),'utf8')).includes('my-own-password-1'));
+  const worker=await createRemoteWorker({secrets:after,localUrl:'http://127.0.0.1:9/',directory:path.join(directory,'jobs')}),url=await listen(worker);t.after(()=>close(worker));
+  const login=password=>fetch(url+'/api/auth/login',{method:'POST',headers:{Authorization:'Bearer '+after.bridgeToken,'Content-Type':'application/json'},body:JSON.stringify({password})});
+  assert.equal((await login(old)).status,401);assert.equal((await login('my-own-password-1')).status,200);
 });

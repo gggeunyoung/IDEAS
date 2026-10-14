@@ -13,7 +13,7 @@ test('등록은 사용자 홈의 저장소 루트와 일치하는 origin만 허�
   const other=await repo(home,'two');const room=await registry.register({name:'두 번째',root:other,repo:'https://github.com/test-owner/two'});
   assert.equal((await registry.resolve(room.id)).root,other);await assert.rejects(registry.resolve('../../other'));
   await assert.rejects(registry.register({name:'다름',root:other,repo:'https://github.com/test-owner/one'}),/origin/);
-  await symlink(other,path.join(home,'linked'));await assert.rejects(registry.register({name:'링크',root:path.join(home,'linked'),repo:'https://github.com/test-owner/two'}));
+  await symlink(other,path.join(home,'linked'),'junction');await assert.rejects(registry.register({name:'링크',root:path.join(home,'linked'),repo:'https://github.com/test-owner/two'}));
   const nested=path.join(other,'nested');await mkdir(nested);await assert.rejects(registry.register({name:'중첩',root:nested,repo:'https://github.com/test-owner/two'}),/루트/);
   for(const url of ['https://evil.example/o/r','https://key@github.com/o/r','https://github.com/o/../r','file:///tmp/repo'])assert.throws(()=>repositoryUrl(url));
 }));

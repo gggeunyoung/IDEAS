@@ -10,8 +10,9 @@ import {listDeliverables,readDeliverable} from './deliverables.mjs';
 import {createRoomRegistry,gitState,loadSession,saveSession} from './room-registry.mjs';
 import {saveRoomGit} from './room-git.mjs';
 import {goalBudget} from './goal-workflow.mjs';
+import {teamBudget} from './team-workflow.mjs';
 const appRoot=path.dirname(fileURLToPath(import.meta.url));
-export function createServer({env=process.env,invoke,invokeLocal,status=localStatus,projectRoot=env.IDEAS_PROJECT_ROOT||appRoot,artifactDir=path.join(appRoot,'artifacts'),deliverableDir=path.join(appRoot,'deliverables'),roomRegistryFile=path.join(projectRoot,'.runtime','rooms.json'),roomHome}={}){
+export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,status=localStatus,projectRoot=env.IDEAS_PROJECT_ROOT||appRoot,artifactDir=path.join(appRoot,'artifacts'),deliverableDir=path.join(appRoot,'deliverables'),roomRegistryFile=path.join(projectRoot,'.runtime','rooms.json'),roomHome}={}){
   let busy=false;
   const registry=createRoomRegistry({file:roomRegistryFile,home:roomHome,defaultRoom:{id:'platform',name:projectRoot===appRoot?'IDEAS · 회의실 앱 개발':path.basename(projectRoot),root:projectRoot,kind:'platform',repo:projectRoot===appRoot?'https://github.com/gggeunyoung/IDEAS':null}});
   const scopeUrl=(url,room)=>url+(url.includes('?')?'&':'?')+'roomId='+encodeURIComponent(room.id);
@@ -65,20 +66,24 @@ export function createServer({env=process.env,invoke,invokeLocal,status=localSta
       if(route==='/api/room-save'){busy=true;acquired=true;return send(200,await saveRoomGit(room.root));}
       const request=validateRequest(data);
       if(request.mode==='live'&&request.participants.some(id=>!publicConfig(env).find(p=>p.id===id).ready))throw new Error('선택한 참가자의 API 키를 설정하세요.');
+      // Reject before any AI call: the generated-test sandbox only exists on macOS.
+      if(request.workflow==='goal'&&process.platform!=='darwin')throw new Error('목표 실행의 테스트 격리는 현재 macOS에서만 지원합니다. AI를 호출하지 않았습니다.');
+      if(request.workflow==='team'&&room.kind!=='project')throw new Error('팀 모드는 GitHub 저장소가 연결된 프로젝트 회의실에서 사용할 수 있습니다. 회의실 앱 자체는 수정하지 않습니다.');
       if(request.mode==='subscription'){const local=await status({env});if(request.participants.some(id=>!local.find(p=>p.id===id)?.ready))throw new Error('선택한 참가자의 구독 계정으로 CLI에 로그인하세요. API로 대체하지 않습니다.');}
       const context=await snapshotFiles(room.root,request.files||[]);
       if(busy)return send(409,{error:'진행 중인 회의가 있습니다.'});busy=true;acquired=true;
       const saved=await loadSession(room.root);
-      const messages=request.history.map((m,index)=>{const previous=saved[index];return previous&&previous.speaker===m.speaker&&previous.text===m.text?previous:{...m,mode:request.mode,workflow:request.workflow};});await saveSession(room.root,messages);
+      // Team runs carry their own memory in .ideas/team, so the room transcript is appended rather than replaced.
+      const messages=request.workflow==='team'?[...saved,{...request.history.at(-1),mode:request.mode,workflow:request.workflow}]:request.history.map((m,index)=>{const previous=saved[index];return previous&&previous.speaker===m.speaker&&previous.text===m.text?previous:{...m,mode:request.mode,workflow:request.workflow};});await saveSession(room.root,messages);
       res.on('close',()=>{if(!res.writableEnded)controller.abort();});res.writeHead(200,{'Content-Type':'application/x-ndjson; charset=utf-8'});
-      const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(request.workflow==='goal'?goalBudget(request.budget).minutes*60000+30000:request.workflow==='files'?600000:request.mode==='subscription'?300000:120000)]);
+      const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(request.workflow==='team'?teamBudget(request.budget).minutes*60000+30000:request.workflow==='goal'?goalBudget(request.budget).minutes*60000+30000:request.workflow==='files'?600000:request.mode==='subscription'?300000:120000)]);
       const events=[];let completed=false;
       const emit=event=>{if(!res.destroyed)res.write(JSON.stringify(event)+'\n');};
       await runMeeting(request,event=>{
         events.push(event);if(['answer','error','goal'].includes(event.type)){messages.push({...event,mode:request.mode,workflow:request.workflow,error:event.type==='error'});const snapshot=JSON.parse(JSON.stringify(messages));persist=persist.then(()=>saveSession(room.root,snapshot));}
         if(event.type==='deliverable')event={...event,url:scopeUrl(event.url,room),files:event.files.map(f=>({...f,url:scopeUrl(f.url,room)}))};
         if(event.type==='done')completed=true;else emit(event);
-      },{env,invoke,invokeLocal,signal,context,deliverableDir:dirs.deliverableDir});
+      },{env,invoke,invokeLocal,invokeTeam,signal,context,deliverableDir:dirs.deliverableDir,projectRoot:room.root});
       await persist;
       if(completed){try{const artifact=await saveArtifact(dirs.artifactDir,request,events);emit({type:'artifact',...artifact,url:scopeUrl(artifact.url,room)});}catch{emit({type:'notice',text:'회의록 파일 저장에 실패했습니다. 브라우저에서 내보내세요.'});}emit({type:'done'});}
       res.end();
