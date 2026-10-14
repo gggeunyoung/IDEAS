@@ -112,3 +112,19 @@ test('사용자가 정한 웹 비밀번호로 바꾸면 이전 비밀번호는 �
   const login=password=>fetch(url+'/api/auth/login',{method:'POST',headers:{Authorization:'Bearer '+after.bridgeToken,'Content-Type':'application/json'},body:JSON.stringify({password})});
   assert.equal((await login(old)).status,401);assert.equal((await login('my-own-password-1')).status,200);
 });
+test('Google login uses the existing protected worker session and keeps password fallback',async t=>{
+  const clientId='123456789-test.apps.googleusercontent.com';let nonce;
+  const f=await workerFixture(t,(req,res)=>{res.end('{"items":[]}');},{googleSettings:{clientId,allowedEmail:'owner@gmail.com'},verifyGoogleToken:async()=>({aud:clientId,iss:'https://accounts.google.com',exp:Math.floor(Date.now()/1000)+600,email:'owner@gmail.com',email_verified:true,sub:'owner-id',nonce})});
+  const challenge=await f.request('/api/auth/config');nonce=(await challenge.json()).google.nonce;const challengeCookie=challenge.headers.get('set-cookie').split(';')[0];
+  assert.equal((await f.request('/api/auth/google',{body:{credential:'token'}})).status,401);
+  const loggedIn=await f.request('/api/auth/google',{cookie:challengeCookie,body:{credential:'token'}});assert.equal(loggedIn.status,200);const cookie=loggedIn.headers.get('set-cookie').split(';')[0];
+  assert.equal((await f.request('/api/rooms',{cookie})).status,200);assert.equal((await f.request('/api/auth/google',{cookie:challengeCookie,body:{credential:'token'}})).status,401);
+  await f.login();await f.request('/api/auth/logout',{cookie,body:{}});assert.equal((await f.request('/api/rooms',{cookie})).status,401);
+});
+test('proxy allows only Google bootstrap routes without session and enforces same origin for credential POST',async t=>{
+  let calls=0,forwarded;const server=http.createServer(createRemoteProxy({env:{IDEAS_BRIDGE_TOKEN:'bridge',IDEAS_WORKER_URL:'https://test.trycloudflare.com',IDEAS_PUBLIC_ORIGIN:'https://ideas.example'},fetchImpl:async(url,options)=>{calls++;forwarded=options;return new Response('{}',{headers:{'Set-Cookie':'__Host-ideas_google=test; Path=/; HttpOnly; Secure'}});}}));const url=await listen(server);t.after(()=>close(server));
+  assert.equal((await fetch(url+'/api/auth/config')).status,200);assert.equal((await fetch(url+'/api/rooms')).status,401);
+  assert.equal((await fetch(url+'/api/auth/google',{method:'POST',headers:{Origin:'https://evil.example','Content-Type':'application/json'},body:'{}'})).status,403);
+  const cookie='__Host-ideas_google='+'a'.repeat(43);const response=await fetch(url+'/api/auth/google',{method:'POST',headers:{Origin:'https://ideas.example','Content-Type':'application/json',Cookie:cookie},body:'{"credential":"test-token"}'});assert.equal(response.status,200);assert.equal(forwarded.headers.Cookie,cookie);assert.equal(calls,2);assert.match(response.headers.get('set-cookie'),/HttpOnly; Secure/);
+  assert.equal((await fetch(url+'/api/auth/google')).status,405);assert.equal((await fetch(url+'/api/auth/config',{method:'POST'})).status,405);
+});

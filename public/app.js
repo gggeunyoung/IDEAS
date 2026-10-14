@@ -185,13 +185,41 @@ async function openRoom(id){
   try{artifactLink(JSON.parse(localStorage.getItem('ideas-artifact:'+id)||(id==='platform'?localStorage.getItem('ideas-artifact'):'null')||'null'));}catch{}
   render();await refresh(false);await Promise.all([refreshResults(),loadFiles()]);
 }
-function showLogin(){$('login-view').hidden=false;$('dashboard').hidden=true;$('room-view').hidden=true;$('logout').hidden=true;$('resume-job').hidden=true;$('worker-state').textContent='회의실 로그인 필요';}
+let googlePreparing=false,googlePrepared=false,googleScriptPromise;
+function loadGoogleScript(){
+  if(window.google?.accounts?.id)return Promise.resolve();
+  if(googleScriptPromise)return googleScriptPromise;
+  googleScriptPromise=new Promise((resolve,reject)=>{
+    const script=document.createElement('script');script.src='https://accounts.google.com/gsi/client';script.async=true;
+    const timer=setTimeout(()=>{script.remove();googleScriptPromise=null;reject(new Error('Google 로그인 로딩이 지연됩니다. 다시 시도하거나 비밀번호로 로그인하세요.'));},15000);
+    script.onload=()=>{clearTimeout(timer);resolve();};script.onerror=()=>{clearTimeout(timer);script.remove();googleScriptPromise=null;reject(new Error('Google 로그인 화면을 불러오지 못했습니다. 다시 시도하세요.'));};document.head.append(script);
+  });return googleScriptPromise;
+}
+async function prepareGoogleLogin(force=false){
+  if(localServer||googlePreparing||googlePrepared&&!force)return;
+  googlePreparing=true;$('google-retry').hidden=true;
+  try{
+    const response=await fetch('/api/auth/config');const auth=await response.json();if(!response.ok)throw new Error(auth.error||'로그인 설정을 읽지 못했습니다.');
+    if(!auth.google?.enabled){$('google-status').textContent='Google 로그인 연결 준비 중입니다. 현재는 회의실 비밀번호로 로그인하세요.';return;}
+    $('google-login').hidden=false;$('google-status').textContent='Google 로그인 버튼을 준비하고 있습니다.';
+    await loadGoogleScript();window.google.accounts.id.initialize({client_id:auth.google.clientId,nonce:auth.google.nonce,auto_select:false,callback:async result=>{
+      $('google-status').textContent='Google 계정을 확인하고 있습니다.';
+      try{await remoteJson('/api/auth/google',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential:result.credential})});googlePrepared=false;await initializeRooms();}
+      catch(error){googlePrepared=false;$('google-status').textContent=error.message;$('google-retry').hidden=false;}
+    }});
+    $('google-button').replaceChildren();window.google.accounts.id.renderButton($('google-button'),{type:'standard',theme:'outline',size:'large',text:'signin_with',locale:'ko',width:280});
+    $('password-fallback').open=false;googlePrepared=true;$('google-status').textContent='내 Google 계정을 선택하세요. 로그인 요청은 10분 동안 유효합니다.';
+  }catch(error){$('google-status').textContent=error.message;$('google-retry').hidden=false;}
+  finally{googlePreparing=false;}
+}
+$('google-retry').onclick=()=>prepareGoogleLogin(true);
+function showLogin(){void prepareGoogleLogin();$('login-view').hidden=false;$('dashboard').hidden=true;$('room-view').hidden=true;$('logout').hidden=true;$('resume-job').hidden=true;$('worker-state').textContent='회의실 로그인 필요';}
 async function initializeRooms(){
   if(!localServer){const auth=await remoteJson('/api/auth/status');$('logout').hidden=false;if(auth.activeJob)localStorage.setItem('ideas-pending-job',auth.activeJob.id);}
   $('login-view').hidden=true;$('dashboard').hidden=false;$('local-access').hidden=true;await loadRooms();const id=new URLSearchParams(location.hash.slice(1)).get('room');if(rooms.some(r=>r.id===id))await openRoom(id);else if(location.hash==='#new-room')$('new-room').click();$('resume-job').hidden=localServer||!localStorage.getItem('ideas-pending-job');
 }
 $('login-form').onsubmit=async event=>{event.preventDefault();$('login-submit').disabled=true;$('login-status').textContent='맥 워커에 로그인하고 있습니다.';try{await remoteJson('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('login-password').value})});$('login-password').value='';await initializeRooms();}catch(error){$('login-status').textContent=error.message;}finally{$('login-submit').disabled=false;}};
-$('logout').onclick=async()=>{if(running)return;try{await remoteJson('/api/auth/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});showLogin();messages=[];rooms=[];config=null;$('log').querySelectorAll('.bubble').forEach(e=>e.remove());$('room-grid').replaceChildren();$('login-status').textContent='로그아웃했습니다.';}catch(error){$('status').textContent=error.message;}};
+$('logout').onclick=async()=>{if(running)return;try{await remoteJson('/api/auth/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});googlePrepared=false;window.google?.accounts?.id.disableAutoSelect();showLogin();messages=[];rooms=[];config=null;$('log').querySelectorAll('.bubble').forEach(e=>e.remove());$('room-grid').replaceChildren();$('login-status').textContent='로그아웃했습니다.';}catch(error){$('status').textContent=error.message;}};
 $('home').onclick=async()=>{if(running)return;$('room-view').hidden=true;$('dashboard').hidden=false;history.replaceState(null,'',location.pathname);try{await loadRooms();$('resume-job').hidden=localServer||!localStorage.getItem('ideas-pending-job');}catch(error){$('dashboard-status').textContent=error.message;}};
 $('new-room').onclick=()=>{$('room-form').hidden=false;$('room-name').focus();};$('cancel-room').onclick=()=>{$('room-form').hidden=true;};
 $('room-form').onsubmit=async event=>{event.preventDefault();if(running)return;state(true);$('stop').hidden=true;$('connect-room').disabled=true;$('new-room').disabled=true;$('dashboard-status').textContent='맥에서 저장소를 클론하고 연결하고 있습니다. 네트워크에 따라 1~2분 걸릴 수 있습니다.';try{const request={name:$('room-name').value,repo:$('room-repo').value};let data;if(localServer){const response=await fetch('/api/rooms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});data=await response.json();if(!response.ok)throw new Error(data.error);}else data=await submitRemoteJob('connect-room',request);await loadRooms();$('room-form').hidden=true;state(false);await openRoom(data.room.id);}catch(error){$('dashboard-status').textContent=error.message;}finally{state(false);$('connect-room').disabled=false;$('new-room').disabled=false;}};

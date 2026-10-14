@@ -17,12 +17,14 @@
     "login:gpt": "node scripts/local-tools.mjs gpt",
     "login:claude": "node scripts/local-tools.mjs claude",
     "login:gemini": "node scripts/local-tools.mjs gemini",
-    "build:static": "node scripts/build-static.mjs"
+    "build:static": "node scripts/build-static.mjs",
+    "setup:google": "node scripts/google-login.mjs"
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
-    "@vercel/blob": "^2.8.1"
+    "@vercel/blob": "^2.8.1",
+    "google-auth-library": "^11.3.0"
   }
 }

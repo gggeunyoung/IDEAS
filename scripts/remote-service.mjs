@@ -2,6 +2,7 @@ import {spawn} from 'node:child_process';
 import {mkdir,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {loadGoogleSettings} from '../google-login.mjs';
 import {prepareRemoteSecrets,createRemoteWorker} from '../remote-worker.mjs';
 import {createServer} from '../server.mjs';
 import {createPreviewServer} from './preview-server.mjs';
@@ -18,7 +19,7 @@ async function ensureLocalServer(){
 }
 await ensureLocalServer();
 const preview=createPreviewServer();await new Promise((resolve,reject)=>{preview.once('error',reject);preview.listen(3032,'127.0.0.1',resolve);});console.log('맥 시제품 미리보기 서버 시작 · 127.0.0.1:3032');
-const worker=await createRemoteWorker({secrets});await new Promise(resolve=>worker.listen(3031,'127.0.0.1',resolve));
+const worker=await createRemoteWorker({secrets,googleSettings:await loadGoogleSettings(path.join(runtime,'google-login.json'))});await new Promise(resolve=>worker.listen(3031,'127.0.0.1',resolve));
 let tunnel,url,registered=false,retryTimer,registerTimer,healthTimer;
 async function register(){
   if(!url||registered||stopping)return;

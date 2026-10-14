@@ -4,8 +4,17 @@
   "buildCommand": "npm run build:static",
   "installCommand": "npm ci",
   "outputDirectory": "dist",
-  "functions": {"api/remote.js": {"maxDuration": 30}},
-  "rewrites": [{"source": "/api/:route*", "destination": "/api/remote?route=:route*"}],
+  "functions": {
+    "api/remote.js": {
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/:route*",
+      "destination": "/api/remote?route=:route*"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",
@@ -16,11 +25,15 @@
         },
         {
           "key": "Referrer-Policy",
-          "value": "no-referrer"
+          "value": "strict-origin-when-cross-origin"
         },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+          "value": "default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' https://accounts.google.com/gsi/style; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        },
+        {
+          "key": "Cross-Origin-Opener-Policy",
+          "value": "same-origin-allow-popups"
         }
       ]
     }

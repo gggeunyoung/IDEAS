@@ -3,6 +3,7 @@ import {randomBytes,randomUUID,scryptSync,timingSafeEqual,createHash} from 'node
 import {mkdir,readFile,writeFile,rename,readdir} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {createGoogleLogin,loadGoogleSettings} from './google-login.mjs';
 import {goalBudget} from './goal-workflow.mjs';
 import {teamBudget} from './team-workflow.mjs';
 
@@ -20,9 +21,10 @@ export async function prepareRemoteSecrets(directory=path.join(root,'.runtime'))
   return secrets;
 }
 async function readJsonBody(req){const chunks=[];let length=0;for await(const chunk of req){const bytes=Buffer.from(chunk);length+=bytes.length;if(length>150000)throw new Error('요청이 너무 큽니다.');chunks.push(bytes);}const body=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks));return JSON.parse(body||'{}');}
-export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:3030',directory=path.join(root,'.runtime','remote-jobs'),fetchImpl=fetch,persistJob}={}){
+export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:3030',directory=path.join(root,'.runtime','remote-jobs'),fetchImpl=fetch,persistJob,googleSettings={},verifyGoogleToken}={}){
   if(!secrets?.bridgeToken||!secrets?.passwordHash||!secrets?.salt)throw new Error('원격 인증 설정이 필요합니다.');
   const local=new URL(localUrl);if(local.protocol!=='http:'||local.hostname!=='127.0.0.1'||local.pathname!=='/')throw new Error('로컬 서버 주소가 올바르지 않습니다.');
+  const google=createGoogleLogin({...googleSettings,verifyToken:verifyGoogleToken});
   const sessions=new Map(),jobs=new Map(),controllers=new Map();let active=null,loginAttempts=[];
   await mkdir(directory,{recursive:true,mode:0o700});
   const store=persistJob||async function(job){const file=path.join(directory,job.id+'.json'),temp=file+'.'+randomUUID();await writeFile(temp,JSON.stringify(job),{mode:0o600});await rename(temp,file);};
@@ -57,9 +59,12 @@ export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:303
     const url=new URL(req.url,'http://worker'),route=url.pathname;
     try{
       if(req.method==='POST'&&!req.headers['content-type']?.startsWith('application/json'))return send(415,{error:'JSON 요청이 필요합니다.'});
-      if(req.method==='POST'&&route==='/api/auth/login'){
+      if(req.method==='GET'&&route==='/api/auth/config'){try{const config=google.challenge();return send(200,config.body,config.cookie?{'Set-Cookie':config.cookie}:{});}catch(error){return send(error.status||503,{error:error.message});}}
+      if(req.method==='POST'&&['/api/auth/login','/api/auth/google'].includes(route)){
         const now=Date.now();loginAttempts=loginAttempts.filter(time=>time>now-60000);if(loginAttempts.length>=10)return send(429,{error:'로그인 시도가 많습니다. 1분 뒤 다시 시도하세요.'});loginAttempts.push(now);
-        const data=await readJsonBody(req);if(typeof data.password!=='string'||data.password.length>128||!equal(scryptSync(data.password,secrets.salt,32).toString('hex'),secrets.passwordHash))return send(401,{error:'비밀번호가 맞지 않습니다.'});
+        const data=await readJsonBody(req);
+        if(route==='/api/auth/google'){try{await google.authenticate(data.credential,req.headers.cookie);}catch(error){return send(error.status||401,{error:error.message});}}
+        else if(typeof data.password!=='string'||data.password.length>128||!equal(scryptSync(data.password,secrets.salt,32).toString('hex'),secrets.passwordHash))return send(401,{error:'비밀번호가 맞지 않습니다.'});
         for(const [key,expires] of sessions)if(expires<now)sessions.delete(key);if(sessions.size>=30)return send(429,{error:'로그인 세션이 너무 많습니다.'});
         const token=randomBytes(32).toString('base64url');sessions.set(hash(token).toString('hex'),now+8*3600000);
         return send(200,{authenticated:true},{'Set-Cookie':`__Host-ideas_session=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=28800`});
@@ -88,5 +93,5 @@ export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:303
   server.requestTimeout=30000;server.on('close',()=>{for(const controller of controllers.values())controller.abort();});return server;
 }
 if(process.argv[1]===fileURLToPath(import.meta.url)){
-  const secrets=await prepareRemoteSecrets();const worker=await createRemoteWorker({secrets});worker.listen(3031,'127.0.0.1',()=>console.log('IDEAS 원격 워커: 127.0.0.1:3031 (인증 필수)'));
+  const secrets=await prepareRemoteSecrets();const worker=await createRemoteWorker({secrets,googleSettings:await loadGoogleSettings(path.join(root,'.runtime','google-login.json'))});worker.listen(3031,'127.0.0.1',()=>console.log('IDEAS 원격 워커: 127.0.0.1:3031 (인증 필수)'));
 }
