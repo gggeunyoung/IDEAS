@@ -29,3 +29,5 @@ Google OAuth 테스트/게시 상태 및 검증 요구는 Cloud 콘솔 안내를
 2026-10-14: 윈도우 변경62e0e33을 먼저 반영했다. 인앱 Google Cloud 콘솔에서 프로젝트/알림 조회가 오류를 내고 인증 페이지 이동도 실패하여 클라이언트 ID를 발급하지 못했다. 프로젝트 만들기를 요청했지만 성공 확인이 없어 생성 완료라고 기록하지 않는다. 실제 Google 로그인 완료를 주장하지 않는다.
 
 공식 문서: [설정](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid), [서버 토큰 검증](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token).
+
+배포 확인: 코드98af4ed의 Vercel production 배포 dpl_EzPLLgb7CpsaihMHqh6X73vPeRUE가 READY다. 맥 서비스 재시작 후 로컬 화면에 팀 모드가 포함됐고 공개 auth/config는200·google.enabled=false·비밀번호 대체 허용을 반환한다. 실제 공개 웹에서 무인증 방 조회401 → 기존 비밀번호 로그인200 → 방2개 조회200 → 로그아웃 후401을 확인했다. 공개 브라우저에 설정 대기 안내가 보이며 콘솔 오류가 없었다. Google 로그인 성공 검증과 구분한다.
