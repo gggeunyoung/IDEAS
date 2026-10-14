@@ -96,7 +96,7 @@ test('Codex·Claude 팀 실행 인자는 작업 폴더 쓰기와 세션 재개�
   const codexArgs=seen[0].args;assert.equal(codexArgs[codexArgs.indexOf('--sandbox')+1],'workspace-write');assert.equal(codexArgs[codexArgs.indexOf('-C')+1],'/work');
   for(const flag of ['--dangerously-bypass-approvals-and-sandbox','--ephemeral','shell_tool','resume'])assert.ok(!codexArgs.includes(flag));
   await callTeamAgent('gpt',{system:'s',user:'u'},{cwd:'/work',env,runner,outputSchema:turnSchema,session:'t-1'});
-  assert.deepEqual(seen[1].args.slice(-3),['resume','t-1','-']);assert.equal(seen[1].options.env.OPENAI_API_KEY,undefined);
+  assert.deepEqual(seen[1].args.slice(-3),['resume','t-1','-']);assert.equal(seen[1].options.env.OPENAI_API_KEY,undefined);assert.equal(seen[1].options.env.PATH.split(path.delimiter)[0],path.dirname(process.execPath));
   const claude=await callTeamAgent('claude',{system:'s',user:'u'},{cwd:'/work',env,runner,outputSchema:turnSchema});
   const claudeArgs=seen[2].args;assert.match(claudeArgs[claudeArgs.indexOf('--session-id')+1],/^[0-9a-f-]{36}$/);assert.equal(claude.session,'c-1');assert.equal(claude.usage.inputTokens,40);
   assert.equal(claudeArgs[claudeArgs.indexOf('--permission-mode')+1],'acceptEdits');assert.equal(seen[2].options.cwd,'/work');

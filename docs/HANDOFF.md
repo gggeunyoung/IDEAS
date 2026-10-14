@@ -4,18 +4,20 @@
 
 사용자의 목표는 토론이 아니라 **Claude와 Codex가 팀원처럼 대화하며 프로젝트 폴더에서 직접 파일을 만들고 명령을 실행해 프로젝트를 완성하는 것**이다. 기존 토론·파일 협업·목표 실행은 CLI 도구를 끈 텍스트/JSON 생성 방식이라 이 목표에 맞지 않음을 확인했다. 그래서 별도의 **에이전트 팀 모드**(team-workflow.mjs, local-agents.mjs의 callTeamAgent)를 첫 버전으로 추가했다. 사용법·권한은 README의 에이전트 팀 절을 본다.
 
-- 실제 검증: Windows에서 Codex 팀 차례 2회(파일 생성·테스트 실행 → 같은 세션 재개 후 기억 유지·기능 추가, 테스트 6개를 실행기가 별도 재실행해 통과)와 팀 실행기 전체 흐름(전용 작업 트리·자동 커밋·원래 브랜치 무변경)을 확인했다. 이어서 사용자가 Claude CLI에 로그인한 뒤 실제 Claude 팀 차례 2회(파일 생성·테스트 → 세션 재개 후 기억·기능 추가)와 **실제 Claude–Codex 협업 1회**를 확인했다: Claude가 wordfreq.mjs·테스트 12개 작성 → GPT가 검토·경계 테스트 4개 추가·16개 통과·완료 제안 → Claude가 직접 실행해 16개 통과 확인·동의로 3차례 2분 만에 완료 합의. 실행기가 작업 트리에서 16개 통과와 원래 브랜치 무변경을 별도로 확인했다. 이 시험들은 시스템 Node가 없어 Codex 앱 내장 Node를 PATH에 넣고 실행했다. **맥 실행과 회의실 웹 화면에서의 팀 실행은 아직 검증하지 않았다.**
+- 실제 검증: Windows에서 Codex 팀 차례 2회(파일 생성·테스트 실행 → 같은 세션 재개 후 기억 유지·기능 추가, 테스트 6개를 실행기가 별도 재실행해 통과)와 팀 실행기 전체 흐름(전용 작업 트리·자동 커밋·원래 브랜치 무변경)을 확인했다. 이어서 사용자가 Claude CLI에 로그인한 뒤 실제 Claude 팀 차례 2회(파일 생성·테스트 → 세션 재개 후 기억·기능 추가)와 **실제 Claude–Codex 협업 1회**를 확인했다: Claude가 wordfreq.mjs·테스트 12개 작성 → GPT가 검토·경계 테스트 4개 추가·16개 통과·완료 제안 → Claude가 직접 실행해 16개 통과 확인·동의로 3차례 2분 만에 완료 합의. 실행기가 작업 트리에서 16개 통과와 원래 브랜치 무변경을 별도로 확인했다. 이 시험들은 에이전트 도구 환경에서 Codex 앱 내장 Node를 PATH에 넣고 실행했다. **맥 실행과 회의실 웹 화면에서의 팀 실행은 아직 검증하지 않았다.**
 - Windows에서 Codex는 `--ignore-user-config` 때문에 앱이 설정한 `[windows] sandbox = "elevated"`가 빠지면 읽기 전용처럼 동작했다. 이 값만 개인 설정에서 읽어 넘기도록 수정했다.
 - 토큰: 개인 설정을 켠 Codex 에이전트 시험은 입력 6.9만(캐시 5.1만)/출력 728, 팀 설정은 단순 차례 2.7만(캐시 1.3만), 파일 2개·테스트 실행 차례 5.6만(캐시 2.7만), 같은 세션 재개 차례 10만(캐시 7만)이었다. 에이전트는 단계마다 맥락 전체를 다시 보내므로 정상 동작이지만 구독 사용량이 많다.
-- Windows의 Store(MSIX) Claude 앱은 claude.exe를 `%LOCALAPPDATA%PackagesClaude_*LocalCacheRoamingClaudeclaude-code`에 둔다. 앱 안에서는 %APPDATA% 경로로 보이지만 일반 터미널에서는 그 경로가 없다. 두 위치를 모두 탐색한다.
+- Windows의 Store(MSIX) Claude 앱은 claude.exe를 `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude-code`에 둔다. 앱 안에서는 %APPDATA% 경로로 보이지만 일반 터미널에서는 그 경로가 없다. 두 위치를 모두 탐색한다.
 - Claude 팀 차례는 허용되지 않은 `cd ... &&` 복합 명령이 거절되자 절대 경로로 다시 실행했다. 허용 목록 밖 명령은 막히고 에이전트가 우회 방법을 찾는다.
 - 원격 웹 비밀번호는 워커 맥에서만 확인·변경한다. `npm run remote:password`로 사용자가 직접 정할 수 있다(docs/remote-connection.md).
-- 다음 작업: 맥 서비스 반영과 맥·웹 화면에서 팀 실행, 결과 브랜치 병합/폐기 UI, 맥에서 Claude 명령의 OS 샌드박스 검토, Node.js 설치 후 이 PC에서 프로젝트 방 등록·웹 실행.
+- 다음 작업: 맥 서비스 반영과 맥·웹 화면에서 팀 실행, 결과 브랜치 병합/폐기 UI, 맥에서 Claude 명령의 OS 샌드박스 검토, 이 PC 웹 화면에서 AI 협업 실험실 방의 실제 팀 실행.
 
 ## Windows 실환경 점검 (2026-10-14, SSAFY Windows 11)
 
-- Node.js가 시스템에 없어 Codex 앱에 포함된 Node v24로 테스트했다. 실사용은 Node.js 22 이상 설치가 필요하다.
-- Codex 앱의 codex.exe(ChatGPT 로그인)와 Claude 앱의 claude.exe를 자동 탐색한다. 이 PC의 Claude CLI는 로그인 전이다.
+- Node.js v24.20.0은 `C:\Program Files\nodejs`에 2026-08-26부터 설치돼 있었다. Claude 앱 안의 에이전트 도구 환경에서는 보이지 않아 처음에 미설치로 잘못 판단했고, 자동 테스트와 스모크 시험은 Codex 앱 내장 Node v24로 실행했다. 사용자의 일반 터미널에서는 `npm start`가 정상 실행됐다.
+- 이 PC의 회의실 웹 화면에서 "새 회의실 연결"로 `gggeunyoung/ideas-room-lab`을 `C:\Users\SSAFY\ideas-room-lab`에 클론·등록했고, GPT·Claude 구독 준비 상태를 확인했다. 방 등록과 현재 대화(.ideas/session.json)는 기기별이라 맥의 현재 대화는 이 PC에 없다.
+- 팀 에이전트의 PATH 앞에 회의실 서버의 Node 폴더를 넣어, 서비스·앱 환경의 PATH에 Node가 없어도 에이전트가 같은 Node로 테스트하게 했다.
+- Codex 앱의 codex.exe(ChatGPT 로그인)와 Claude 앱의 claude.exe를 자동 탐색한다. 이 PC의 Claude CLI는 사용자가 Store 앱의 실제 경로로 로그인했다.
 - 수정: Git이 반환하는 `C:/...` 경로 때문에 프로젝트 방 등록이 항상 실패하던 문제, Windows CLI 탐색, `npm.cmd` 실행 방식, 목표 실행의 macOS 전용 격리를 AI 호출 전에 거절하도록 변경. Windows 자동 테스트 59개 중 57개 통과·2개 macOS 전용 건너뜀(팀 모드 테스트 9개 포함). 전체 실행 4회 중 1회 기존 파일 협업 HTTP 테스트가 간헐 실패했고 단독·재실행에서는 통과했다.
 - 이 PC에서 회의실 서버(127.0.0.1:3030) 화면과 팀 모드 설정 표시를 브라우저로 확인했다.
 

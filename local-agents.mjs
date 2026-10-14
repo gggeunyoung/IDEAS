@@ -207,6 +207,8 @@ export function parseTeamTurn(id,raw){
 export async function callTeamAgent(id,prompt,{cwd,session,env=process.env,signal,runner=runProcess,outputSchema,webSearch=false,timeoutMs=900000,platform=process.platform}={}){
   if(!['gpt','claude'].includes(id))throw new Error('팀 모드는 GPT·Claude 구독 에이전트만 지원합니다.');
   const p=catalog.find(p=>p.id===id),clean=subscriptionEnv(env),command=await executableFor(id,env),model=env[`LOCAL_${id.toUpperCase()}_MODEL`];
+  // Agents test with the same Node as the room server, even when a service or app PATH lacks it.
+  clean.PATH=[path.dirname(process.execPath),clean.PATH].filter(Boolean).join(path.delimiter);
   const scratch=await mkdtemp(path.join(tmpdir(),'ideas-team-'));
   try{
     let args,claudeSession;
