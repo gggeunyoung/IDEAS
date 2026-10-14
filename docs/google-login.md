@@ -31,3 +31,9 @@ Google OAuth 테스트/게시 상태 및 검증 요구는 Cloud 콘솔 안내를
 공식 문서: [설정](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid), [서버 토큰 검증](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token).
 
 배포 확인: 코드98af4ed의 Vercel production 배포 dpl_EzPLLgb7CpsaihMHqh6X73vPeRUE가 READY다. 맥 서비스 재시작 후 로컬 화면에 팀 모드가 포함됐고 공개 auth/config는200·google.enabled=false·비밀번호 대체 허용을 반환한다. 실제 공개 웹에서 무인증 방 조회401 → 기존 비밀번호 로그인200 → 방2개 조회200 → 로그아웃 후401을 확인했다. 공개 브라우저에 설정 대기 안내가 보이며 콘솔 오류가 없었다. Google 로그인 성공 검증과 구분한다.
+
+## 클라이언트 등록·비공개 JSON 보관 — 2026-10-14
+
+사용자가 웹 클라이언트 ID를 제공해 워커의 비공개 설정에 등록했다. 진행 중인 회의가 없는 것을 확인한 뒤 서비스를 재시작했고 공개 auth/config의 Google 활성화200과 실제 Google 버튼 표시를 확인했다. 다운로드한 웹 OAuth JSON의 승인 원본에 공개 회의실 주소가 들어 있음을 확인했다. 실제 Google 로그인과 세션 발급은 아직 확인하지 못했다. 인앱 버튼 클릭 후 로그인 팝업/계정 선택이 나타나지 않아 최초 로그인은 사용자 확인이 남았다.
+
+사용자가 향후 사용을 위해 보관을 요청한 원본 JSON은 `.runtime/credentials/google-oauth-client.json`에 그대로 복사했다. 원본과 바이트가 같으며 보관 폴더700·파일600, Git 제외를 확인했다. 다운로드 원본은 삭제하지 않았다. client_secret은 현재 로그인 코드에서 읽거나 사용하지 않으며 값·JSON 본문을 Git/문서/로그에 넣지 않는다. 이 복사본은 해당 맥 내부에만 보관되며 다른 노트북으로 자동 동기화되지 않는다.
