@@ -7,12 +7,12 @@ import {validateRequest,runMeeting} from './room.mjs';
 import {localStatus} from './local-agents.mjs';
 import {projectFiles,snapshotFiles,saveArtifact,readArtifact} from './project-context.mjs';
 import {listDeliverables,readDeliverable} from './deliverables.mjs';
-import {createRoomRegistry,gitState,loadSession,saveSession} from './room-registry.mjs';
+import {createRoomRegistry,gitState,loadSession,saveSession,githubAccount} from './room-registry.mjs';
 import {saveRoomGit} from './room-git.mjs';
 import {goalBudget} from './goal-workflow.mjs';
 import {teamBudget} from './team-workflow.mjs';
 const appRoot=path.dirname(fileURLToPath(import.meta.url));
-export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,status=localStatus,projectRoot=env.IDEAS_PROJECT_ROOT||appRoot,artifactDir=path.join(appRoot,'artifacts'),deliverableDir=path.join(appRoot,'deliverables'),roomRegistryFile=path.join(projectRoot,'.runtime','rooms.json'),roomHome}={}){
+export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,status=localStatus,github=githubAccount,projectRoot=env.IDEAS_PROJECT_ROOT||appRoot,artifactDir=path.join(appRoot,'artifacts'),deliverableDir=path.join(appRoot,'deliverables'),roomRegistryFile=path.join(projectRoot,'.runtime','rooms.json'),roomHome}={}){
   let busy=false;
   const registry=createRoomRegistry({file:roomRegistryFile,home:roomHome,defaultRoom:{id:'platform',name:projectRoot===appRoot?'IDEAS · 회의실 앱 개발':path.basename(projectRoot),root:projectRoot,kind:'platform',repo:projectRoot===appRoot?'https://github.com/gggeunyoung/IDEAS':null}});
   const scopeUrl=(url,room)=>url+(url.includes('?')?'&':'?')+'roomId='+encodeURIComponent(room.id);
@@ -32,6 +32,7 @@ export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,stat
       res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
       try{const data=await readFile(new URL(`./public/${name}`,import.meta.url));res.writeHead(200,{'Content-Type':name.endsWith('.js')?'text/javascript; charset=utf-8':name.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8'});return res.end(data);}catch{return send(404,{error:'파일을 찾을 수 없습니다.'});}
     }
+    if(req.method==='GET'&&route==='/api/github')return send(200,await github(env));
     if(req.method==='GET'&&route==='/api/rooms'){
       try{const items=await Promise.all((await registry.all()).map(async room=>({...room,git:await gitState(room.root)})));return send(200,{items,busy});}catch{return send(500,{error:'회의실 목록을 읽지 못했습니다.'});}
     }
@@ -59,7 +60,7 @@ export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,stat
     try{
       const chunks=[];let length=0;for await(const chunk of req){const bytes=Buffer.from(chunk);length+=bytes.length;if(length>150000)throw new Error('요청이 너무 큽니다.');chunks.push(bytes);}const body=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks));
       const data=JSON.parse(body);
-      if(route==='/api/rooms'){busy=true;acquired=true;const room=await registry.clone(data);return send(201,{room});}
+      if(route==='/api/rooms'){busy=true;acquired=true;const room=data.create===true?await registry.create(data):await registry.clone(data);return send(201,{room});}
       if(url.searchParams.get('roomId')&&data.roomId&&url.searchParams.get('roomId')!==data.roomId)throw new Error('회의실 요청이 일치하지 않습니다.');
       const room=await registry.resolve(data.roomId||url.searchParams.get('roomId'));const dirs=await storage(room);
       if(route==='/api/session'){if(data.reset!==true)throw new Error('새 대화를 시작할 요청이 필요합니다.');await saveSession(room.root,[]);return send(200,{reset:true});}

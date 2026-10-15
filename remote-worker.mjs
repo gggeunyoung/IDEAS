@@ -82,7 +82,7 @@ export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:303
         try{await store(job);}catch{jobs.delete(job.id);controllers.delete(job.id);if(active===job.id)active=null;return send(503,{error:'맥에 작업 상태를 저장하지 못했습니다. 디스크 공간과 권한을 확인하세요.'});}
         send(202,{id:job.id,status:job.status});void execute(job).catch(()=>{controllers.delete(job.id);if(active===job.id)active=null;});return;
       }
-      const allowedGet=/^\/api\/(rooms|config|files|session|deliverables|artifacts\/[0-9a-f-]{36}|deliverables\/[0-9a-f-]{36}\/(draft|final)\/(bundle|file))$/.test(route);
+      const allowedGet=/^\/api\/(rooms|github|config|files|session|deliverables|artifacts\/[0-9a-f-]{36}|deliverables\/[0-9a-f-]{36}\/(draft|final)\/(bundle|file))$/.test(route);
       const reset=req.method==='POST'&&route==='/api/session';
       if((req.method!=='GET'||!allowedGet)&&!reset)return send(404,{error:'허용되지 않은 경로입니다.'});
       const body=reset?await readJsonBody(req):null;if(reset&&body.reset!==true)return send(400,{error:'새 대화 요청이 필요합니다.'});
