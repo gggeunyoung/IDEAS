@@ -1,5 +1,14 @@
 # IDEAS 인수인계 — 2026-10-14
 
+## 맥 워커에서 할 일 (2026-10-15, Windows 세션이 남김)
+
+Vercel(https://ideas-nine-opal.vercel.app/)은 화면과 중계만 하고 방 만들기·AI·Git 작업은 맥 워커가 한다. 아래를 하기 전까지 Vercel의 새 프로젝트 만들기는 맥의 이전 코드가 처리해 동작하지 않는다(폼에는 GitHub 계정 확인 실패가 표시된다).
+
+1. 진행 중인 회의가 없는지 확인하고 IDEAS 폴더에서 git pull, npm ci.
+2. GitHub CLI 설치(brew install gh)와 사용자 본인의 gh auth login. 새 저장소는 gh 로그인 계정에 비공개로 만들어진다.
+3. 원격 서비스 재시작: launchctl kickstart -k gui/$(id -u)/com.gggeunyoung.ideas-remote
+4. Vercel 화면에서 새 회의실 연결 → 계정 표시 확인 → 만들고 연결로 실제 생성 검증.
+
 ## 2026-10-15: 새 프로젝트 방 만들기 (Windows PC)
 
 - 사용자가 회의실 이름과 `https://github.com/gggeunyoung/`만 넣고 연결을 시도해 거절됐다. 기존 버튼은 이미 있는 저장소를 클론하는 기능이었다. 사용자는 항상 자신의 GitHub에 새 저장소를 만들 것이므로 주소 입력 없이 만들기를 원했다.
