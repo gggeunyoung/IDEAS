@@ -1,5 +1,5 @@
 import {readFile,writeFile,mkdir,lstat,realpath,rename,access} from 'node:fs/promises';
-import {execFile} from 'node:child_process';
+import {execFile,spawn} from 'node:child_process';
 import {promisify} from 'node:util';
 import {homedir} from 'node:os';
 import {createHash,randomUUID} from 'node:crypto';
@@ -15,30 +15,57 @@ export async function ghExecutable(env=process.env,platform=process.platform){
   for(const file of candidates.filter(Boolean)){try{await access(file);return file;}catch{}}
   return 'gh';
 }
-// Creates a private repository with a README under the account the GitHub CLI is logged in to.
-export async function createGithubRepo(repoName,description,env=process.env){
+const exists='같은 이름의 저장소가 이미 내 GitHub에 있습니다. 다른 이름을 쓰거나 기존 저장소 연결을 고르세요.';
+const notLoggedIn=/auth login|not logged|authenticat/i;
+// The credential git already uses for clone/push on this computer. Helpers answer without prompting or fail.
+export function gitCredentialToken(env=process.env){
+  return new Promise(resolve=>{
+    let out='',child;
+    try{child=spawn('git',['credential','fill'],{env:{...env,GIT_TERMINAL_PROMPT:'0',GCM_INTERACTIVE:'never'},stdio:['pipe','pipe','ignore'],windowsHide:true});}catch{return resolve(null);}
+    const timer=setTimeout(()=>{child.kill();resolve(null);},15000);
+    child.stdout.on('data',chunk=>{out+=chunk;});child.on('error',()=>{clearTimeout(timer);resolve(null);});
+    child.on('close',code=>{clearTimeout(timer);resolve(code===0?/^password=(.+)$/m.exec(out)?.[1].trim()||null:null);});
+    child.stdin.on('error',()=>{});child.stdin.end('protocol=https\nhost=github.com\n\n');
+  });
+}
+const githubApi=(fetchImpl,route,token,options={})=>fetchImpl('https://api.github.com'+route,{...options,headers:{Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'IDEAS-rooms',Authorization:'Bearer '+token,...options.headers},signal:AbortSignal.timeout(30000)});
+// Creates a private repository with a README in the user's own account: GitHub CLI first, otherwise the existing git login.
+export async function createGithubRepo(repoName,description,env=process.env,{token=gitCredentialToken,fetchImpl=fetch}={}){
   let stdout;
   try{({stdout}=await exec(await ghExecutable(env),['repo','create',repoName,'--private','--add-readme','--description',description],{timeout:60000,maxBuffer:1000000,env:{...env,GH_PROMPT_DISABLED:'1',GIT_TERMINAL_PROMPT:'0'}}));}
   catch(error){
-    if(error.code==='ENOENT')throw new Error('GitHub CLI(gh)가 필요합니다. 설치한 뒤 터미널에서 gh auth login으로 로그인하세요.');
     const text=String(error.stderr||'');
-    if(/already exists/i.test(text))throw new Error('같은 이름의 저장소가 이미 내 GitHub에 있습니다. 다른 이름을 쓰거나 기존 저장소 연결을 고르세요.');
-    if(/auth login|not logged|authenticat/i.test(text))throw new Error('GitHub CLI 로그인이 필요합니다. 터미널에서 gh auth login을 실행하세요.');
-    throw new Error('GitHub 저장소를 만들지 못했습니다. 네트워크와 gh 로그인 상태를 확인하세요.');
+    if(/already exists/i.test(text))throw new Error(exists);
+    if(error.code!=='ENOENT'&&!notLoggedIn.test(text))throw new Error('GitHub 저장소를 만들지 못했습니다. 네트워크와 GitHub 로그인 상태를 확인하세요.');
+    const secret=await token(env);
+    if(!secret)throw new Error('이 컴퓨터에서 GitHub 로그인을 찾지 못했습니다. gh auth login을 하거나 git으로 GitHub에 한 번 로그인하세요.');
+    const response=await githubApi(fetchImpl,'/user/repos',secret,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:repoName,description,private:true,auto_init:true})});
+    if(response.status===422)throw new Error(exists);
+    if(!response.ok)throw new Error(response.status===401?'이 컴퓨터의 GitHub 로그인이 만료됐습니다. 다시 로그인하세요.':'이 컴퓨터의 GitHub 로그인에는 저장소를 만들 권한이 없습니다. gh auth login으로 로그인하세요.');
+    const url=(await response.json()).html_url;if(typeof url!=='string')throw new Error('GitHub가 새 저장소 주소를 돌려주지 않았습니다. 내 GitHub에서 생성 여부를 확인하세요.');
+    return url;
   }
   const url=/https:\/\/github\.com\/\S+/.exec(stdout)?.[0];if(!url)throw new Error('GitHub가 새 저장소 주소를 돌려주지 않았습니다. 내 GitHub에서 생성 여부를 확인하세요.');
   return url;
 }
 // Shows which account a new project will be created under before anything is created.
-export async function githubAccount(env=process.env){
+export async function githubAccount(env=process.env,{token=gitCredentialToken,fetchImpl=fetch}={}){
   try{
     const {stdout}=await exec(await ghExecutable(env),['api','user','--jq','.login'],{timeout:20000,maxBuffer:100000,env:{...env,GH_PROMPT_DISABLED:'1'}});
-    const account=stdout.trim();if(!/^[A-Za-z0-9-]{1,39}$/.test(account))throw new Error();return {ready:true,account};
+    const account=stdout.trim();if(!/^[A-Za-z0-9-]{1,39}$/.test(account))throw new Error();return {ready:true,account,via:'gh'};
   }catch(error){
-    if(error.code==='ENOENT')return {ready:false,error:'GitHub CLI(gh)가 설치되지 않았습니다. 설치한 뒤 터미널에서 gh auth login으로 로그인하세요.'};
-    if(/auth login|not logged|authenticat|401/i.test(String(error.stderr||'')))return {ready:false,error:'GitHub CLI 로그인이 필요합니다. 터미널에서 gh auth login을 실행하세요.'};
-    return {ready:false,error:'GitHub 계정을 확인하지 못했습니다. 네트워크와 gh 로그인 상태를 확인하세요.'};
+    if(error.code!=='ENOENT'&&!notLoggedIn.test(String(error.stderr||'')))return {ready:false,error:'GitHub 계정을 확인하지 못했습니다. 네트워크와 GitHub 로그인 상태를 확인하세요.'};
   }
+  const secret=await token(env);
+  if(!secret)return {ready:false,error:'이 컴퓨터에서 GitHub 로그인을 찾지 못했습니다. gh auth login을 하거나 git으로 GitHub에 한 번 로그인하세요.'};
+  try{
+    const response=await githubApi(fetchImpl,'/user',secret);
+    if(!response.ok)return {ready:false,error:'이 컴퓨터의 GitHub 로그인이 만료됐거나 확인되지 않습니다. 다시 로그인하세요.'};
+    const scopes=response.headers.get('x-oauth-scopes');
+    // Classic tokens list their scopes; fine-grained tokens do not, so their permission is learned on creation.
+    if(scopes!=null&&!/(^|,\s*)repo(\s*,|$)/.test(scopes))return {ready:false,error:'이 컴퓨터의 GitHub 로그인에는 저장소를 만들 권한이 없습니다. gh auth login으로 로그인하세요.'};
+    const account=(await response.json()).login;if(typeof account!=='string')throw new Error();return {ready:true,account,via:'git'};
+  }catch{return {ready:false,error:'GitHub 계정을 확인하지 못했습니다. 네트워크를 확인하세요.'};}
 }
 const cloneGithubRepo=async(url,root)=>exec('git',['-c','core.hooksPath=/dev/null','clone','--',url,root],{timeout:120000,maxBuffer:1000000,env:{...process.env,GIT_TERMINAL_PROMPT:'0'}});
 export async function git(root,args){try{return (await exec('git',['-c','core.hooksPath=/dev/null','-C',root,...args],{timeout:120000,maxBuffer:1000000,env:{...process.env,GIT_TERMINAL_PROMPT:'0'}})).stdout.trim();}catch{throw new Error('Git 작업에 실패했습니다. 저장소·계정 권한·네트워크를 확인하세요.');}}

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm,symlink,realpath} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {createRoomRegistry,git,repositoryUrl,repositoryName,ghExecutable,githubAccount} from '../room-registry.mjs';
+import {createRoomRegistry,git,repositoryUrl,repositoryName,ghExecutable,githubAccount,createGithubRepo} from '../room-registry.mjs';
 import {saveRoomGit} from '../room-git.mjs';
 import {createServer} from '../server.mjs';
 const fixture=async fn=>{const dir=await realpath(await mkdtemp(path.join(tmpdir(),'ideas-rooms-')));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}};
@@ -66,8 +66,24 @@ test('GitHub CLI는 명시 경로·설치 경로를 먼저 찾고 없으면 PATH
   assert.equal(await ghExecutable({PROGRAMFILES:dir},'win32'),exe);assert.equal(await ghExecutable({PROGRAMFILES:path.join(dir,'none')},'win32'),'gh');
 }));
 test('새 프로젝트 폼은 만들기 전에 작업 컴퓨터의 GitHub 계정 상태를 확인함',async()=>fixture(async dir=>{
-  const missing=await githubAccount({...process.env,IDEAS_GH_BIN:path.join(dir,'no-gh.exe')});assert.equal(missing.ready,false);assert.match(missing.error,/설치/);
+  const missing=await githubAccount({...process.env,IDEAS_GH_BIN:path.join(dir,'no-gh.exe')},{token:async()=>null});assert.equal(missing.ready,false);assert.match(missing.error,/로그인을 찾지 못했습니다/);
   const server=createServer({env:{},projectRoot:dir,roomRegistryFile:path.join(dir,'r.json'),roomHome:dir,github:async()=>({ready:true,account:'test-owner'})});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
   try{assert.deepEqual(await (await fetch(`http://127.0.0.1:${server.address().port}/api/github`)).json(),{ready:true,account:'test-owner'});}finally{await new Promise(r=>server.close(r));}
+}));
+test('GitHub CLI가 없으면 이 컴퓨터의 기존 git 로그인으로 계정 확인·비공개 저장소 생성을 함',async()=>fixture(async dir=>{
+  const env={...process.env,IDEAS_GH_BIN:path.join(dir,'missing-gh.exe')},secret='test-token-not-real',calls=[];
+  const reply=(status,body,headers={})=>new Response(JSON.stringify(body),{status,headers});
+  const fetchImpl=async(url,options)=>{calls.push({url,options});return url.endsWith('/user')?reply(200,{login:'test-owner'},{'x-oauth-scopes':'repo, workflow'}):reply(201,{html_url:'https://github.com/test-owner/new-room'});};
+  assert.deepEqual(await githubAccount(env,{token:async()=>secret,fetchImpl}),{ready:true,account:'test-owner',via:'git'});
+  assert.equal(calls[0].options.headers.Authorization,'Bearer '+secret);
+  assert.equal((await githubAccount(env,{token:async()=>secret,fetchImpl:async()=>reply(200,{login:'x'},{'x-oauth-scopes':'read:user'})})).ready,false);
+  assert.equal((await githubAccount(env,{token:async()=>null,fetchImpl})).ready,false);
+  assert.equal(await createGithubRepo('new-room','IDEAS 회의실 · 새 방',env,{token:async()=>secret,fetchImpl}),'https://github.com/test-owner/new-room');
+  const created=calls.at(-1);assert.match(created.url,/\/user\/repos$/);assert.deepEqual(JSON.parse(created.options.body),{name:'new-room',description:'IDEAS 회의실 · 새 방',private:true,auto_init:true});
+  for(const [status,pattern] of [[422,/이미/],[403,/권한/],[401,/만료/]]){
+    const error=await createGithubRepo('x',"d",env,{token:async()=>secret,fetchImpl:async()=>reply(status,{})}).catch(e=>e);
+    assert.match(error.message,pattern);assert.ok(!error.message.includes(secret));
+  }
+  await assert.rejects(createGithubRepo('x','d',env,{token:async()=>null,fetchImpl}),/로그인을 찾지 못했습니다/);
 }));

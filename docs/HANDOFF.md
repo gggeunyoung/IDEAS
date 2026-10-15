@@ -2,12 +2,14 @@
 
 ## 맥 워커에서 할 일 (2026-10-15, Windows 세션이 남김)
 
-Vercel(https://ideas-nine-opal.vercel.app/)은 화면과 중계만 하고 방 만들기·AI·Git 작업은 맥 워커가 한다. 아래를 하기 전까지 Vercel의 새 프로젝트 만들기는 맥의 이전 코드가 처리해 동작하지 않는다(폼에는 GitHub 계정 확인 실패가 표시된다).
+Vercel(https://ideas-nine-opal.vercel.app/)은 화면과 중계만 하고 방 만들기·AI·Git 작업은 맥 워커가 한다. 사용자가 Vercel에서 새 방 만들기를 시도했지만 맥이 이전 코드라 동작하지 않았다. 맥에서 아래를 한 번 해야 한다.
 
 1. 진행 중인 회의가 없는지 확인하고 IDEAS 폴더에서 git pull, npm ci.
-2. GitHub CLI 설치(brew install gh)와 사용자 본인의 gh auth login. 새 저장소는 gh 로그인 계정에 비공개로 만들어진다.
-3. 원격 서비스 재시작: launchctl kickstart -k gui/$(id -u)/com.gggeunyoung.ideas-remote
-4. Vercel 화면에서 새 회의실 연결 → 계정 표시 확인 → 만들고 연결로 실제 생성 검증.
+2. 원격 서비스 재시작: launchctl kickstart -k gui/$(id -u)/com.gggeunyoung.ideas-remote
+3. Vercel에서 새 회의실 연결을 열어 "GitHub 계정 ○○에 비공개 저장소로 만들어집니다" 표시를 확인한 뒤 만들고 연결로 실제 생성을 검증한다. 맥의 git이 GitHub에 푸시할 수 있으면 gh 설치 없이 그 로그인으로 만든다(Windows에서 git 로그인 경로의 계정·repo 권한 확인, 실제 생성은 gh 경로로만 검증). 권한 부족이 표시되면 brew install gh 후 사용자가 gh auth login.
+4. gggeunyoung/after-death-care는 이미 GitHub에 있으므로 맥에서는 기존 저장소 연결로 붙인다.
+
+미결정 제안: 푸시를 맥이 자동으로 받는 자동 업데이트(유휴 시 fast-forward → 테스트 통과 시에만 재시작, 실패 시 이전 버전 유지)를 만들다가, 맥이 사람 확인 없이 원격 코드를 받아 실행하는 지속 실행 변경이라 권한 정책에서 서비스 설정 변경이 거절됐다. 사용자 승인 전에는 구현·배포하지 않는다.
 
 ## 2026-10-15: 새 프로젝트 방 만들기 (Windows PC)
 
