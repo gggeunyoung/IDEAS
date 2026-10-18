@@ -9,6 +9,7 @@ import {validateRequest} from '../room.mjs';
 import {createRoomRegistry,git} from '../room-registry.mjs';
 import {createServer} from '../server.mjs';
 
+const noPush=async()=>({branch:'test',commit:'test',pushed:true});
 const fixture=async fn=>{const dir=await realpath(await mkdtemp(path.join(tmpdir(),'ideas-team-')));try{await fn(dir);}finally{await rm(dir,{recursive:true,force:true,maxRetries:3});}};
 async function project(dir,name='proj'){
   const root=path.join(dir,name);await mkdir(root);await git(root,['init','-q','-b','main']);
@@ -20,7 +21,7 @@ const request=(text,extra={})=>({mode:'subscription',workflow:'team',participant
 const turn=(message,status='continue',extra={})=>({session:extra.session,report:{message,status,next:extra.next||'',question:extra.question||''},usage:{inputTokens:100,cachedInputTokens:60,outputTokens:10},actions:{commands:1,edits:1,turns:3},model:'test'});
 async function run(root,req,agents){
   const events=[],calls=[];
-  await runTeamWorkflow(req,e=>events.push(e),{projectRoot:root,invokeTeam:async(id,prompt,options)=>{calls.push({id,prompt,options});return agents.shift()(id,prompt,options);}});
+  await runTeamWorkflow(req,e=>events.push(e),{syncBranch:noPush,projectRoot:root,invokeTeam:async(id,prompt,options)=>{calls.push({id,prompt,options});return agents.shift()(id,prompt,options);}});
   return {events,calls,final:events.find(e=>e.type==='goal'&&e.final)};
 }
 
@@ -116,7 +117,7 @@ test('팀 차례 파서는 재연결 경고 뒤 완료를 성공으로, 실패�
 test('HTTP 팀 모드는 프로젝트 회의실에서만 실행하고 대화 기록을 덮어쓰지 않고 이어 붙임',async()=>fixture(async home=>{
   const platform=await project(home,'platform'),second=await project(home,'two');const registryFile=path.join(home,'registry.json');
   const registry=createRoomRegistry({file:registryFile,home,defaultRoom:{id:'platform',root:platform}});const room=await registry.register({name:'팀 방',root:second,repo:'https://github.com/test-owner/two'});
-  let calls=0;const server=createServer({env:{},projectRoot:platform,artifactDir:path.join(platform,'artifacts'),deliverableDir:path.join(platform,'deliverables'),roomRegistryFile:registryFile,roomHome:home,status:async()=>[{id:'gpt',ready:true},{id:'claude',ready:true}],
+  let calls=0;const server=createServer({syncBranch:noPush,saveGit:noPush,env:{},projectRoot:platform,artifactDir:path.join(platform,'artifacts'),deliverableDir:path.join(platform,'deliverables'),roomRegistryFile:registryFile,roomHome:home,status:async()=>[{id:'gpt',ready:true},{id:'claude',ready:true}],
     invokeTeam:async(id,prompt,options)=>{calls++;assert.ok(options.cwd.startsWith(second));return turn(`${id} 작업`,'done');}});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`;
   const post=(roomId,body)=>fetch(base+'/api/meeting',{method:'POST',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify({...request('팀으로 만들어줘'),roomId,...body})});
@@ -171,6 +172,6 @@ test('리서치 목적과 너무 짧은 예산을 요청 단계에서 검증함'
 });
 test('리서치 결과를 웹의 저장된 파일 결과에서 읽을 수 있도록 공유본으로 내보냄',async()=>fixture(async dir=>{
   const root=await project(dir),output=path.join(root,'outputs'),events=[];let turns=0;
-  await runTeamWorkflow(request('공유 가능한 리서치',{teamFocus:'research',budget:{minutes:10,maxTurns:8}}),e=>events.push(e),{projectRoot:root,deliverableDir:output,invokeTeam:async(id,p,o)=>{turns++;if(turns===1)await researchFiles(o.cwd);return researchTurn('확인 '+turns,'done');}});
+  await runTeamWorkflow(request('공유 가능한 리서치',{teamFocus:'research',budget:{minutes:10,maxTurns:8}}),e=>events.push(e),{syncBranch:noPush,projectRoot:root,deliverableDir:output,invokeTeam:async(id,p,o)=>{turns++;if(turns===1)await researchFiles(o.cwd);return researchTurn('확인 '+turns,'done');}});
   const saved=events.find(e=>e.type==='deliverable');assert.ok(saved);assert.equal(saved.files.length,3);const {readDeliverable}=await import('../deliverables.mjs');assert.match(await readDeliverable(output,saved.id,'final','research/proposal.md'),/기획 초안/);assert.equal(events.at(-1).type,'done');
 }));

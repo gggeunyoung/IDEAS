@@ -8,11 +8,11 @@ import {localStatus} from './local-agents.mjs';
 import {projectFiles,snapshotFiles,saveArtifact,readArtifact} from './project-context.mjs';
 import {listDeliverables,readDeliverable} from './deliverables.mjs';
 import {createRoomRegistry,gitState,loadSession,saveSession,githubAccount} from './room-registry.mjs';
-import {saveRoomGit} from './room-git.mjs';
+import {saveRoomGit,readProjectSync} from './room-git.mjs';
 import {goalBudget} from './goal-workflow.mjs';
 import {teamBudget} from './team-workflow.mjs';
 const appRoot=path.dirname(fileURLToPath(import.meta.url));
-export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,status=localStatus,github=githubAccount,projectRoot=env.IDEAS_PROJECT_ROOT||appRoot,artifactDir=path.join(appRoot,'artifacts'),deliverableDir=path.join(appRoot,'deliverables'),roomRegistryFile=path.join(projectRoot,'.runtime','rooms.json'),roomHome}={}){
+export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,syncBranch,saveGit=saveRoomGit,status=localStatus,github=githubAccount,projectRoot=env.IDEAS_PROJECT_ROOT||appRoot,artifactDir=path.join(appRoot,'artifacts'),deliverableDir=path.join(appRoot,'deliverables'),roomRegistryFile=path.join(projectRoot,'.runtime','rooms.json'),roomHome}={}){
   let busy=false;
   const registry=createRoomRegistry({file:roomRegistryFile,home:roomHome,defaultRoom:{id:'platform',name:projectRoot===appRoot?'IDEAS · 회의실 앱 개발':path.basename(projectRoot),root:projectRoot,kind:'platform',repo:projectRoot===appRoot?'https://github.com/gggeunyoung/IDEAS':null}});
   const scopeUrl=(url,room)=>url+(url.includes('?')?'&':'?')+'roomId='+encodeURIComponent(room.id);
@@ -39,7 +39,7 @@ export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,stat
     if(req.method==='GET'){
       try{
         const room=await registry.resolve(url.searchParams.get('roomId'));const dirs=await storage(room);
-        if(route==='/api/config')return send(200,{participants:publicConfig(env),local:await status({env}),projectName:room.name,room,pricingDate:'2026-10-11'});
+        if(route==='/api/config')return send(200,{participants:publicConfig(env),local:await status({env}),projectName:room.name,room,gitSync:room.kind==='project'?await readProjectSync(room.root):{},pricingDate:'2026-10-11'});
         if(route==='/api/files')return send(200,{files:await projectFiles(room.root)});
         if(route==='/api/session')return send(200,{messages:await loadSession(room.root)});
         if(route==='/api/deliverables')return send(200,{items:await listDeliverables(dirs.deliverableDir)});
@@ -56,7 +56,7 @@ export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,stat
     if(req.method!=='POST'||!['/api/meeting','/api/rooms','/api/session','/api/room-save'].includes(route))return send(404,{error:'경로를 찾을 수 없습니다.'});
     if(req.headers.origin!==`http://${host}`||!req.headers['content-type']?.startsWith('application/json'))return send(403,{error:'같은 로컬 화면에서만 호출할 수 있습니다.'});
     if(busy)return send(409,{error:'진행 중인 작업이 있습니다. 완료 후 다시 보내세요.'});
-    const controller=new AbortController();let acquired=false,persist=Promise.resolve();
+    const controller=new AbortController();let acquired=false,persist=Promise.resolve(),heartbeat;
     try{
       const chunks=[];let length=0;for await(const chunk of req){const bytes=Buffer.from(chunk);length+=bytes.length;if(length>150000)throw new Error('요청이 너무 큽니다.');chunks.push(bytes);}const body=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks));
       const data=JSON.parse(body);
@@ -64,7 +64,7 @@ export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,stat
       if(url.searchParams.get('roomId')&&data.roomId&&url.searchParams.get('roomId')!==data.roomId)throw new Error('회의실 요청이 일치하지 않습니다.');
       const room=await registry.resolve(data.roomId||url.searchParams.get('roomId'));const dirs=await storage(room);
       if(route==='/api/session'){if(data.reset!==true)throw new Error('새 대화를 시작할 요청이 필요합니다.');await saveSession(room.root,[]);return send(200,{reset:true});}
-      if(route==='/api/room-save'){busy=true;acquired=true;return send(200,await saveRoomGit(room.root));}
+      if(route==='/api/room-save'){busy=true;acquired=true;return send(200,await saveGit(room.root));}
       const request=validateRequest(data);
       if(request.mode==='live'&&request.participants.some(id=>!publicConfig(env).find(p=>p.id===id).ready))throw new Error('선택한 참가자의 API 키를 설정하세요.');
       // Reject before any AI call: the generated-test sandbox only exists on macOS.
@@ -78,19 +78,26 @@ export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,stat
       const messages=request.workflow==='team'?[...saved,{...request.history.at(-1),mode:request.mode,workflow:request.workflow}]:request.history.map((m,index)=>{const previous=saved[index];return previous&&previous.speaker===m.speaker&&previous.text===m.text?previous:{...m,mode:request.mode,workflow:request.workflow};});await saveSession(room.root,messages);
       res.on('close',()=>{if(!res.writableEnded)controller.abort();});res.writeHead(200,{'Content-Type':'application/x-ndjson; charset=utf-8'});
       const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(request.workflow==='team'?teamBudget(request.budget).minutes*60000+30000:request.workflow==='goal'?goalBudget(request.budget).minutes*60000+30000:request.workflow==='files'?600000:request.mode==='subscription'?300000:120000)]);
-      const events=[];let completed=false;let heartbeat;
+      const events=[],generated=new Set();let completed=false,runError;
       const emit=event=>{if(!res.destroyed)res.write(JSON.stringify({at:new Date().toISOString(),...event})+'\n');};
       heartbeat=setInterval(()=>emit({type:'heartbeat'}),15000);heartbeat.unref();
       try{await runMeeting(request,event=>{
         event={at:new Date().toISOString(),...event};if(event.type!=='activity')events.push(event);if(['answer','error','goal'].includes(event.type)){messages.push({...event,mode:request.mode,workflow:request.workflow,error:event.type==='error'});const snapshot=JSON.parse(JSON.stringify(messages));persist=persist.then(()=>saveSession(room.root,snapshot));}
-        if(event.type==='deliverable')event={...event,url:scopeUrl(event.url,room),files:event.files.map(f=>({...f,url:scopeUrl(f.url,room)}))};
+        if(event.type==='deliverable'){generated.add(path.relative(room.root,path.join(dirs.deliverableDir,event.id)).split(path.sep).join('/'));}if(event.type==='deliverable')event={...event,url:scopeUrl(event.url,room),files:event.files.map(f=>({...f,url:scopeUrl(f.url,room)}))};
         if(event.type==='done')completed=true;else emit(event);
-      },{env,invoke,invokeLocal,invokeTeam,signal,context,deliverableDir:dirs.deliverableDir,projectRoot:room.root});}finally{clearInterval(heartbeat);}
+      },{env,invoke,invokeLocal,invokeTeam,syncBranch,signal,context,deliverableDir:dirs.deliverableDir,projectRoot:room.root});}catch(error){runError=error;}
       await persist;
-      if(completed){try{const artifact=await saveArtifact(dirs.artifactDir,request,events);emit({type:'artifact',...artifact,url:scopeUrl(artifact.url,room)});}catch{emit({type:'notice',text:'회의록 파일 저장에 실패했습니다. 브라우저에서 내보내세요.'});}emit({type:'done'});}
+      try{const artifact=await saveArtifact(dirs.artifactDir,request,events);generated.add(path.relative(room.root,path.join(dirs.artifactDir,artifact.id+'.md')).split(path.sep).join('/'));emit({type:'artifact',...artifact,url:scopeUrl(artifact.url,room)});}catch{emit({type:'notice',text:'회의록 파일 저장에 실패했습니다. 브라우저에서 내보내세요.'});}
+      if(room.kind==='project'&&generated.size){
+        emit({type:'git',scope:'room',status:'pushing',text:'회의록·공유 결과 GitHub 저장 중'});
+        try{const result=await saveGit(room.root,{paths:[...generated]});emit({type:'git',scope:'room',status:'pushed',...result});}
+        catch(error){emit({type:'git',scope:'room',status:'failed',text:error.message});}
+      }
+      if(runError)throw runError;
+      if(completed)emit({type:'done'});
       res.end();
     }catch(error){if(!res.headersSent)send(400,{error:error instanceof SyntaxError?'요청 형식을 확인하세요.':error.message});else if(!res.destroyed)res.end(JSON.stringify({type:'notice',text:'작업을 완료하지 못했습니다. 생성된 답변은 저장된 대화나 내보내기로 확인하세요.'})+'\n');}
-    finally{try{await persist;}catch{}if(acquired)busy=false;}
+    finally{clearInterval(heartbeat);try{await persist;}catch{}if(acquired)busy=false;}
   });
   server.requestTimeout=7230000;return server;
 }

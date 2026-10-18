@@ -48,6 +48,10 @@ test('파일 협업의 이름만 포함한 오류도 실패한 참가자의 작�
   assert.equal(progressView(p,base).title,'GPT 작업 중');assert.equal(p.answers,0);
   assert.match(jobFailureMessage({error:'terminated'}),/응답 연결이 끊겨/);
 });
+test('GitHub 저장 상태는 팀과 회의록을 각각 보존하고 작업 완료와 푸시 실패를 구분한다',()=>{
+  const p=newProgress();progressEvent(p,{type:'git',scope:'team',status:'pushed',commit:'abc'});progressEvent(p,{type:'git',scope:'room',status:'failed',text:'연결 실패'});progressEvent(p,{type:'done'});
+  assert.equal(p.git.team.status,'pushed');assert.equal(p.git.room.status,'failed');assert.equal(p.terminal,'done');
+});
 test('CLI 활동은 나뉜 JSON 줄을 복원하고 원문·도구 인자·추론을 전달하지 않는다',()=>{
   const events=[];let now=base;const report=createActivityReporter('claude',e=>events.push(e),{now:()=>now});
   const raw=JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',name:'WebSearch',input:{query:'PRIVATE_SECRET'}}]}})+'\n';

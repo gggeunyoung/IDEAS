@@ -1,21 +1,28 @@
-import {readFile,lstat} from 'node:fs/promises';
+import {readFile} from 'node:fs/promises';
 import path from 'node:path';
-import {containsSensitive} from './project-context.mjs';
-import {git,repositoryUrl} from './room-registry.mjs';
-export async function saveRoomGit(root){
+import {checkWorkingFile,pushSafeBranch,saveExistingTeam} from './git-sync.mjs';
+import {git,repositoryUrl,atomicJson} from './room-registry.mjs';
+export async function saveRoomGit(root,{paths,syncBranch=pushSafeBranch}={}){
+  const syncFile=path.join(root,'.ideas','git-sync.json');
+  try{
   const branch=await git(root,['branch','--show-current']);if(!branch)throw new Error('브랜치가 없는 작업 상태에서는 저장하지 않습니다.');
   repositoryUrl(await git(root,['remote','get-url','origin']));
   if(await git(root,['diff','--cached','--name-only']))throw new Error('이미 스테이징한 변경이 있습니다. 먼저 해당 변경을 정리하세요.');
   const roots=['README.md','AGENTS.md','CLAUDE.md','.gitignore','docs/HANDOFF.md','conversations','deliverables','outputs'];
-  const listed=await git(root,['ls-files','--modified','--others','--exclude-standard','-z','--',...roots]);
+  if(paths&&(!paths.length||paths.some(p=>typeof p!=='string'||p.split(/[\\/]/).includes('..')||!roots.some(r=>p===r||p.startsWith(r+'/')))))throw new Error('회의실이 생성한 저장 범위를 확인하세요.');
+  const listed=await git(root,['ls-files','--modified','--deleted','--others','--exclude-standard','-z','--',...(paths||roots)]);
   const files=listed.split('\0').filter(Boolean);if(files.length>200)throw new Error('저장할 파일이 200개를 넘었습니다. 범위를 나눠 주세요.');
-  for(const relative of files){const parts=relative.split('/');if(parts.some(p=>p==='..'||p==='.env'||p==='node_modules')||/(?:^|\/)(?:credential|secret|password|oauth|auth\.json)/i.test(relative))throw new Error('저장할 파일에 비밀정보 경로가 포함됐습니다.');
-    let current=root;for(const part of parts){current=path.join(current,part);if((await lstat(current)).isSymbolicLink())throw new Error('심볼릭 링크는 저장하지 않습니다.');}
-    const stat=await lstat(current);if(!stat.isFile()||stat.size>200000)throw new Error('일반 텍스트 파일만 저장할 수 있습니다.');
-    const content=await readFile(current,'utf8');if(content.includes('\0')||containsSensitive(content))throw new Error('비밀정보 또는 바이너리로 보이는 파일은 저장하지 않습니다.');
-  }
+  for(const relative of files)await checkWorkingFile(root,relative);
+  const team=paths?null:await saveExistingTeam(root,{syncBranch});
   if(files.length){await git(root,['add','--',...files]);await git(root,['commit','-m','Save room conversations and generated files']);}
-  const commit=await git(root,['rev-parse','--short','HEAD']);
-  try{await git(root,['push','origin',branch]);}catch{throw new Error(`커밋 ${commit}은 로컬에 있습니다. 푸시에 실패했으므로 GitHub 권한·네트워크를 확인하세요.`);}
-  return {commit,branch,files:files.length,pushed:true};
+  const result=await syncBranch(root);
+  const backup={...result,branch,files:files.length,...(team?{team}:{})};
+  await atomicJson(syncFile,{status:'pushed',...backup,checkedAt:new Date().toISOString()});return backup;
+  }catch(error){try{await atomicJson(syncFile,{status:'failed',text:error.message,checkedAt:new Date().toISOString()});}catch{}throw error;}
+}
+
+export async function readProjectSync(root){
+  const result={};
+  for(const [scope,file] of [['team','team/state.json'],['room','git-sync.json']]){try{const data=JSON.parse(await readFile(path.join(root,'.ideas',file),'utf8')),saved=scope==='team'?data.gitSync:data;if(saved)result[scope]=Object.fromEntries(['status','branch','commit','url','text','checkedAt'].filter(k=>saved[k]!=null).map(k=>[k,saved[k]]));}catch{}}
+  return result;
 }

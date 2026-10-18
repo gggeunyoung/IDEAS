@@ -24,9 +24,9 @@ export function validateRequest(value) {
   return value;
 }
 
-export async function runMeeting(request,emit,{env=process.env,invoke=callProvider,invokeLocal=callLocalAgent,invokeTeam,signal,context='',deliverableDir,projectRoot}={}) {
+export async function runMeeting(request,emit,{env=process.env,invoke=callProvider,invokeLocal=callLocalAgent,invokeTeam,syncBranch,signal,context='',deliverableDir,projectRoot}={}) {
   const {history,participants,review,mode}=validateRequest(request);
-  if(request.workflow==='team')return runTeamWorkflow(request,emit,{env,signal,projectRoot,deliverableDir,...(invokeTeam?{invokeTeam}:{})});
+  if(request.workflow==='team')return runTeamWorkflow(request,emit,{env,signal,projectRoot,deliverableDir,...(invokeTeam?{invokeTeam}:{}),...(syncBranch?{syncBranch}:{})});
   if(request.workflow==='goal')return runGoalWorkflow(request,emit,{env,invokeLocal,signal,context,deliverableDir});
   if(request.workflow==='files')return runFileWorkflow(request,emit,{env,invokeLocal,signal,context,deliverableDir});
   if(mode==='live'&&participants.some(id=>!env[catalog.find(p=>p.id===id).key])) throw new Error('선택한 참가자의 API 키를 모두 설정하세요.');

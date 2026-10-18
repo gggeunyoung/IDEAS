@@ -1,9 +1,10 @@
 export const activityLabels={waiting:'AI 응답 대기',working:'도구 결과 처리 중',searching:'웹 검색 중',fetching:'웹 자료 확인 중',reading:'프로젝트 자료 읽는 중',editing:'파일 작성·수정 중',command:'명령 실행 중',responding:'답변 생성 중',retrying:'AI 연결 재시도 중'};
 const time=value=>Number.isFinite(Date.parse(value))?Date.parse(value):null;
-export function newProgress(startedAt=null){return {startedAt:time(startedAt),finishedAt:null,agents:{},answers:0,connection:'checking',checkedAt:null,terminal:null,finalLabel:null};}
+export function newProgress(startedAt=null){return {startedAt:time(startedAt),finishedAt:null,agents:{},git:{},answers:0,connection:'checking',checkedAt:null,terminal:null,finalLabel:null};}
 export function progressEvent(p,e){
   const at=time(e.at);
   const agent=()=>p.agents[e.provider||e.speaker]||Object.values(p.agents).find(a=>a.speaker===e.speaker);
+  if(e.type==='git'&&['team','room'].includes(e.scope))p.git[e.scope]=e;
   if(e.type==='pending')p.agents[e.provider||e.speaker]={speaker:e.speaker,round:e.round,phase:e.phase,startedAt:at,activity:'waiting',lastActivity:null,active:true};
   if(e.type==='activity'){
     const a=agent();if(a?.active&&activityLabels[e.activity]){a.activity=e.activity;a.lastActivity=at;}

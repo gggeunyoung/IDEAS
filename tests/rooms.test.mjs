@@ -20,12 +20,12 @@ test('등록은 사용자 홈의 저장소 루트와 일치하는 origin만 허�
 test('방별 자료·대화·결과 다운로드는 다른 방과 분리됨',async()=>fixture(async home=>{
   const first=await repo(home,'one'),second=await repo(home,'two');const registryFile=path.join(home,'registry.json');const registry=createRoomRegistry({file:registryFile,home,defaultRoom:{id:'platform',root:first}});
   const room=await registry.register({name:'두 번째',root:second,repo:'https://github.com/test-owner/two'});
-  const server=createServer({env:{},projectRoot:first,artifactDir:path.join(first,'artifacts'),deliverableDir:path.join(first,'deliverables'),roomRegistryFile:registryFile,roomHome:home,status:async()=>[{id:'gpt',ready:true}],invokeLocal:async(id,prompt)=>{assert.ok(prompt.user.includes('two-ONLY'));assert.ok(!prompt.user.includes('one-ONLY'));return {speaker:'GPT',provider:id,text:'two 결과'};}});
+  const savedScopes=[];const server=createServer({saveGit:async(root,options)=>{savedScopes.push(options.paths);return {pushed:true,branch:'test',commit:'test'};},env:{},projectRoot:first,artifactDir:path.join(first,'artifacts'),deliverableDir:path.join(first,'deliverables'),roomRegistryFile:registryFile,roomHome:home,status:async()=>[{id:'gpt',ready:true}],invokeLocal:async(id,prompt)=>{assert.ok(prompt.user.includes('two-ONLY'));assert.ok(!prompt.user.includes('one-ONLY'));return {speaker:'GPT',provider:id,text:'two 결과'};}});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`,scope=`?roomId=${room.id}`;
   try{
     const body={roomId:room.id,mode:'subscription',participants:['gpt'],review:false,files:['README.md'],history:[{speaker:'사용자',text:'자료 읽기'}]};
     const response=await fetch(base+'/api/meeting'+scope,{method:'POST',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify(body)});assert.equal(response.status,200);
-    const events=(await response.text()).trim().split('\n').map(JSON.parse);const artifact=events.find(e=>e.type==='artifact');assert.ok(artifact.url.includes(room.id));
+    const events=(await response.text()).trim().split('\n').map(JSON.parse);const artifact=events.find(e=>e.type==='artifact');assert.ok(artifact.url.includes(room.id));assert.deepEqual(savedScopes,[[`conversations/${artifact.id}.md`]]);assert.ok(events.some(e=>e.type==='git'&&e.scope==='room'&&e.status==='pushed'));
     assert.match(await (await fetch(base+artifact.url)).text(),/two 결과/);
     assert.equal((await fetch(base+artifact.url.replace(room.id,'platform'))).status,404);
     assert.equal((await (await fetch(base+'/api/session'+scope)).json()).messages.at(-1).text,'two 결과');
