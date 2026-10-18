@@ -3,12 +3,13 @@ const time=value=>Number.isFinite(Date.parse(value))?Date.parse(value):null;
 export function newProgress(startedAt=null){return {startedAt:time(startedAt),finishedAt:null,agents:{},answers:0,connection:'checking',checkedAt:null,terminal:null,finalLabel:null};}
 export function progressEvent(p,e){
   const at=time(e.at);
+  const agent=()=>p.agents[e.provider||e.speaker]||Object.values(p.agents).find(a=>a.speaker===e.speaker);
   if(e.type==='pending')p.agents[e.provider||e.speaker]={speaker:e.speaker,round:e.round,phase:e.phase,startedAt:at,activity:'waiting',lastActivity:null,active:true};
   if(e.type==='activity'){
-    const a=p.agents[e.provider||e.speaker];if(a?.active&&activityLabels[e.activity]){a.activity=e.activity;a.lastActivity=at;}
+    const a=agent();if(a?.active&&activityLabels[e.activity]){a.activity=e.activity;a.lastActivity=at;}
   }
   if(e.type==='answer'||e.type==='error'){
-    const a=p.agents[e.provider||e.speaker];if(a){a.active=false;a.activity=e.type==='error'?'failed':'done';}if(e.type==='answer')p.answers++;
+    const a=agent();if(a){a.active=false;a.activity=e.type==='error'?'failed':'done';}if(e.type==='answer')p.answers++;
   }
   if(e.type==='goal'&&e.final)p.finalLabel=e.status;
   if(e.type==='done'){p.terminal='done';p.finishedAt=at;for(const a of Object.values(p.agents))a.active=false;}

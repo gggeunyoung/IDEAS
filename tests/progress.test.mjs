@@ -40,6 +40,13 @@ test('작업 재조회는 앞선 대화를 유지하고 이미 저장된 답변�
   const p=newProgress(start);progressJob(p,{status:'done',finishedAt:'2026-10-18T15:02:00.000Z'},base+3600000);
   assert.match(progressView(p,base+3600000).elapsed,/2분 0초/);
 });
+test('파일 협업의 이름만 포함한 오류도 실패한 참가자의 작업 중 표시를 해제한다',()=>{
+  const p=newProgress();progressEvent(p,{type:'pending',provider:'claude',speaker:'Claude'});
+  progressEvent(p,{type:'pending',provider:'gpt',speaker:'GPT'});
+  progressEvent(p,{type:'error',speaker:'Claude',text:'호출 실패'});
+  progressJob(p,{status:'running'},base);
+  assert.equal(progressView(p,base).title,'GPT 작업 중');assert.equal(p.answers,0);
+});
 test('CLI 활동은 나뉜 JSON 줄을 복원하고 원문·도구 인자·추론을 전달하지 않는다',()=>{
   const events=[];let now=base;const report=createActivityReporter('claude',e=>events.push(e),{now:()=>now});
   const raw=JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',name:'WebSearch',input:{query:'PRIVATE_SECRET'}}]}})+'\n';
