@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {newProgress,progressEvent,progressJob,progressView,replayHistory} from '../public/progress.js';
+import {newProgress,progressEvent,progressJob,progressView,replayHistory,jobFailureMessage} from '../public/progress.js';
 import {createActivityReporter} from '../agent-activity.mjs';
 import {runProcess,subscriptionEnv,callTeamAgent,parseTeamTurn} from '../local-agents.mjs';
 import {mkdtemp,rm} from 'node:fs/promises';
@@ -46,6 +46,7 @@ test('파일 협업의 이름만 포함한 오류도 실패한 참가자의 작�
   progressEvent(p,{type:'error',speaker:'Claude',text:'호출 실패'});
   progressJob(p,{status:'running'},base);
   assert.equal(progressView(p,base).title,'GPT 작업 중');assert.equal(p.answers,0);
+  assert.match(jobFailureMessage({error:'terminated'}),/응답 연결이 끊겨/);
 });
 test('CLI 활동은 나뉜 JSON 줄을 복원하고 원문·도구 인자·추론을 전달하지 않는다',()=>{
   const events=[];let now=base;const report=createActivityReporter('claude',e=>events.push(e),{now:()=>now});

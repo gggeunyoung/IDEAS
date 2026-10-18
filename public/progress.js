@@ -34,3 +34,6 @@ export function replayHistory(saved,history=[],mode,workflow){
   const prompt=history.at(-1),index=prompt?saved.findLastIndex(m=>m.speaker==='사용자'&&m.text===prompt.text):-1;
   return index>=0?saved.slice(0,index+1):history.map(m=>({...m,mode,workflow}));
 }
+export function jobFailureMessage(job){
+  return job.error==='terminated'?'맥의 응답 연결이 끊겨 작업이 중단됐습니다. 저장된 답변과 파일은 남아 있습니다. 같은 팀으로 이어서 진행할 수 있습니다.':job.error||'작업이 완료되지 않았습니다.';
+}

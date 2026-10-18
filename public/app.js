@@ -1,4 +1,4 @@
-import {newProgress,progressEvent,progressJob,progressView,replayHistory} from './progress.js';
+import {newProgress,progressEvent,progressJob,progressView,replayHistory,jobFailureMessage} from './progress.js';
 const $=id=>document.getElementById(id);
 // Shown by default in index.html; only a page actually served by the room server reaches this line.
 $('boot-warning')?.remove();
@@ -140,7 +140,7 @@ async function pollJob(id,onUpdate){
   while(true){
     let job;try{job=await remoteJson(`/api/jobs/${id}?after=${cursor}`);failures=0;}catch(error){progressFailure();if(error.status===401)throw new Error('로그인이 만료됐습니다. 다시 로그인한 뒤 이전 작업을 조회하세요.');if(error.status===404){localStorage.removeItem('ideas-pending-job');$('resume-job').hidden=true;remoteJob=null;throw error;}if(++failures>=5)throw new Error(error.message+' 작업은 맥에서 계속 실행될 수 있습니다. 상단의 이전 작업 다시 조회를 누르세요.');$('status').textContent=`결과 연결 재시도 ${failures}/5 · 맥의 작업 완료 여부는 아직 확인되지 않았습니다.`;await pause(3000);continue;}
     await onUpdate?.(job);if(executionProgress&&job.type==='meeting'){progressJob(executionProgress,job);renderProgress();}cursor=job.cursor;
-    if(['done','failed','cancelled','interrupted'].includes(job.status)){localStorage.removeItem('ideas-pending-job');$('resume-job').hidden=true;remoteJob=null;if(job.status!=='done')throw new Error(job.error||'작업이 완료되지 않았습니다.');return job.result;}
+    if(['done','failed','cancelled','interrupted'].includes(job.status)){localStorage.removeItem('ideas-pending-job');$('resume-job').hidden=true;remoteJob=null;if(job.status!=='done')throw new Error(jobFailureMessage(job));return job.result;}
     await pause(2000);
   }
 }
