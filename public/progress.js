@@ -21,7 +21,7 @@ export function progressJob(p,job,now=Date.now()){
 }
 export function duration(ms){const seconds=Math.max(0,Math.floor(ms/1000));return seconds<60?`${seconds}초`:`${Math.floor(seconds/60)}분 ${seconds%60}초`;}
 export function progressView(p,now=Date.now()){
-  const active=Object.values(p.agents).filter(a=>a.active),stale=p.connection!=='online'||!p.checkedAt||now-p.checkedAt>15000;
+  const active=Object.values(p.agents).filter(a=>a.active),stale=p.connection!=='online'||!p.checkedAt||now-p.checkedAt>(p.staleAfterMs||15000);
   const state=p.terminal?'finished':stale?'unknown':'running';
   const title=p.terminal?({done:'작업 종료',failed:'작업 실패',cancelled:'사용자 중단',interrupted:'워커 재시작으로 중단'}[p.terminal]||'실행 상태 확인 필요'):stale?'연결 확인 중 · 실행 여부 미확인':active.length?`${active.map(a=>a.speaker).join(' · ')} 작업 중`:'맥에서 다음 단계 진행 중';
   return {state,title,elapsed:p.startedAt?`전체 경과 ${duration((p.finishedAt||now)-p.startedAt)}`:'전체 시작 시각 미기록',connection:p.checkedAt?`마지막 연결 확인 ${duration(now-p.checkedAt)} 전`:'맥 연결 확인 대기',answers:`답변 ${p.answers}개 수신`,agents:active.map(a=>({
