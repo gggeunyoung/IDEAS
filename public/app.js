@@ -64,7 +64,7 @@ function renderProgress(){
   $('progress-hint').textContent=view.state==='running'?'맥에서 작업이 실행 중입니다. 세부 상태는 CLI가 실제로 보고한 활동만 표시합니다.':view.state==='unknown'?'작업은 맥에서 계속될 수 있습니다. 연결 상태와 AI 실행 상태는 별개입니다.':executionProgress.terminal==='done'?'이번 실행이 끝났습니다. 종료 사유와 결과물을 확인하세요.':'종료 사유를 확인한 뒤 다시 시작하거나 이전 작업을 조회하세요.';
 }
 function startProgress(startedAt=null){executionProgress=newProgress(startedAt);renderProgress();}
-function progressFailure(terminal='unknown'){if(!executionProgress)return;if(terminal==='unknown')executionProgress.connection='offline';else executionProgress.terminal=terminal;renderProgress();}
+function progressFailure(terminal='unknown'){if(!executionProgress)return;if(terminal==='unknown')executionProgress.connection='offline';else{executionProgress.terminal=terminal;executionProgress.finishedAt=Date.now();for(const a of Object.values(executionProgress.agents))a.active=false;}renderProgress();}
 setInterval(()=>{if(executionProgress&&!executionProgress.terminal)renderProgress();},1000);
 function selected(){return [...document.querySelectorAll('[name=participant]:checked')].map(e=>e.value);}
 function updateWriter(){
