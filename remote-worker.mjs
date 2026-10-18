@@ -72,7 +72,11 @@ export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:303
         return send(200,{authenticated:true},{'Set-Cookie':`__Host-ideas_session=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=28800`});
       }
       if(!authenticated(req))return send(401,{error:'회의실에 로그인하세요.'});
-      if(req.method==='GET'&&route==='/api/auth/status')return send(200,{authenticated:true,worker:'online',recoveryWarnings,activeJob:active?{id:active,type:jobs.get(active).type,roomId:jobs.get(active).request.roomId||'platform'}:null});
+      if(req.method==='GET'&&route==='/api/auth/status'){
+        const roomId=url.searchParams.get('roomId');
+        const latest=roomId?[...jobs.values()].filter(j=>j.type==='meeting'&&(j.request.roomId||'platform')===roomId).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''))[0]:null;
+        return send(200,{authenticated:true,worker:'online',recoveryWarnings,activeJob:active?{id:active,type:jobs.get(active).type,roomId:jobs.get(active).request.roomId||'platform'}:null,latestMeeting:latest?{id:latest.id,status:latest.status}:null});
+      }
       if(req.method==='POST'&&route==='/api/auth/logout'){const token=cookieToken(req);if(token)sessions.delete(hash(token).toString('hex'));return send(200,{authenticated:false},{'Set-Cookie':'__Host-ideas_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0'});}
       const match=/^\/api\/jobs\/([0-9a-f-]{36})(\/cancel)?$/.exec(route);
       if(match){const job=jobs.get(match[1]);if(!job)return send(404,{error:'작업을 찾을 수 없습니다.'});if(req.method==='POST'&&match[2]){if(job.type!=='meeting')return send(409,{error:'Git 저장과 저장소 연결은 중단할 수 없습니다.'});if(!['queued','running'].includes(job.status))return send(200,{cancelled:false,status:job.status});controllers.get(job.id)?.abort();return send(200,{cancelled:true});}if(req.method==='GET'&&!match[2]){const cursor=Number(url.searchParams.get('after')||0);if(!Number.isInteger(cursor)||cursor<0)return send(400,{error:'작업 위치가 올바르지 않습니다.'});return send(200,{id:job.id,type:job.type,roomId:job.request.roomId||'platform',status:job.status,createdAt:job.createdAt,finishedAt:job.finishedAt,checkedAt:new Date().toISOString(),events:job.events.slice(cursor),cursor:job.events.length,result:job.result,error:job.error,...(cursor===0&&job.type==='meeting'?{history:job.request.history,mode:job.request.mode,workflow:job.request.workflow}:{})});}return send(405,{error:'허용되지 않은 요청입니다.'});}

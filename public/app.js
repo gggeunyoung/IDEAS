@@ -209,7 +209,7 @@ async function openRoom(id,{autoResume=true,allowRunning=false}={}){
   try{const response=await api('/api/session');if(!response.ok)throw new Error();messages=(await response.json()).messages;if(!messages.length){const key=id==='platform'?'ideas-room':'ideas-room:'+id;try{messages=JSON.parse(localStorage.getItem(key)||'[]');}catch{messages=[];}}}catch{messages=[];$('status').textContent='저장된 대화를 읽지 못했습니다.';}
   try{artifactLink(JSON.parse(localStorage.getItem('ideas-artifact:'+id)||(id==='platform'?localStorage.getItem('ideas-artifact'):'null')||'null'));}catch{}
   render();await refresh(false);await Promise.all([refreshResults(),loadFiles()]);
-  if(!localServer&&autoResume){try{const auth=await remoteJson('/api/auth/status');if(auth.activeJob?.type==='meeting'&&auth.activeJob.roomId===id){localStorage.setItem('ideas-pending-job',auth.activeJob.id);void resumeMeetingJob(auth.activeJob.id,false);}}catch(error){$('status').textContent=error.message;}}
+  if(!localServer&&autoResume){try{const auth=await remoteJson('/api/auth/status?roomId='+encodeURIComponent(id));const jobId=auth.activeJob?.type==='meeting'&&auth.activeJob.roomId===id?auth.activeJob.id:auth.latestMeeting?.id;if(jobId){localStorage.setItem('ideas-pending-job',jobId);void resumeMeetingJob(jobId,false);}}catch(error){$('status').textContent=error.message;}}
 }
 let googlePreparing=false,googlePrepared=false,googleScriptPromise;
 function loadGoogleScript(){
