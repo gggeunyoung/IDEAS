@@ -19,14 +19,14 @@ export function validateRequest(value) {
   if(['draft','files','goal','team'].includes(value.workflow)&&!value.participants.includes(value.writer)) throw new Error('초안 작성자를 참가자 중에서 선택하세요.');
   if(value.workflow==='files'&&(value.mode!=='subscription'||value.participants.length!==2||!value.review))throw new Error('파일 협업은 구독 참가자 2명과 검토 옵션이 필요합니다.');
   if(value.workflow==='goal'){if(value.mode!=='subscription'||value.participants.length!==2||!value.review||value.participants.some(p=>!['gpt','claude'].includes(p)))throw new Error('목표 실행은 GPT·Claude 구독 참가자 2명과 검토가 필요합니다.');goalBudget(value.budget);}
-  if(value.workflow==='team'){if(value.mode!=='subscription'||value.participants.length!==2||value.participants.some(p=>!['gpt','claude'].includes(p)))throw new Error('팀 모드는 GPT·Claude 구독 에이전트 2명이 필요합니다.');teamBudget(value.budget);if(value.newTeam!=null&&typeof value.newTeam!=='boolean')throw new Error('새 팀 시작 여부를 확인하세요.');}
+  if(value.workflow==='team'){if(value.mode!=='subscription'||value.participants.length!==2||value.participants.some(p=>!['gpt','claude'].includes(p)))throw new Error('팀 모드는 GPT·Claude 구독 에이전트 2명이 필요합니다.');teamBudget(value.budget);if(value.teamFocus!=null&&!['research','build'].includes(value.teamFocus))throw new Error('팀 작업 목적을 확인하세요.');if(value.teamFocus==='research'&&teamBudget(value.budget).maxTurns<6)throw new Error('리서치·기획은 최소6차례 예산이 필요합니다.');if(value.newTeam!=null&&typeof value.newTeam!=='boolean')throw new Error('새 팀 시작 여부를 확인하세요.');}
   if(value.files!=null&&(!Array.isArray(value.files)||value.files.length>8||value.files.some(f=>typeof f!=='string')))throw new Error('자료 파일은 최대 8개입니다.');
   return value;
 }
 
 export async function runMeeting(request,emit,{env=process.env,invoke=callProvider,invokeLocal=callLocalAgent,invokeTeam,signal,context='',deliverableDir,projectRoot}={}) {
   const {history,participants,review,mode}=validateRequest(request);
-  if(request.workflow==='team')return runTeamWorkflow(request,emit,{env,signal,projectRoot,...(invokeTeam?{invokeTeam}:{})});
+  if(request.workflow==='team')return runTeamWorkflow(request,emit,{env,signal,projectRoot,deliverableDir,...(invokeTeam?{invokeTeam}:{})});
   if(request.workflow==='goal')return runGoalWorkflow(request,emit,{env,invokeLocal,signal,context,deliverableDir});
   if(request.workflow==='files')return runFileWorkflow(request,emit,{env,invokeLocal,signal,context,deliverableDir});
   if(mode==='live'&&participants.some(id=>!env[catalog.find(p=>p.id===id).key])) throw new Error('선택한 참가자의 API 키를 모두 설정하세요.');

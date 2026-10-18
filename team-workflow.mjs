@@ -2,6 +2,8 @@ import {mkdir,writeFile,readFile,appendFile,access} from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {callTeamAgent} from './local-agents.mjs';
+import {researchReportSchema,researchInstructions,researchArtifacts,researchSnapshot,recordResearchProgress,researchChecks} from './research-team.mjs';
+import {createDeliverable,saveVersion} from './deliverables.mjs';
 import {git} from './room-registry.mjs';
 
 export function teamBudget(value={}){
@@ -10,6 +12,7 @@ export function teamBudget(value={}){
   return {minutes,maxTurns};
 }
 export const turnSchema={type:'object',additionalProperties:false,required:['message','status','next','question'],properties:{message:{type:'string'},status:{type:'string',enum:['continue','done','need_user']},next:{type:'string'},question:{type:'string'}}};
+export const researchTurnSchema={...turnSchema,required:[...turnSchema.required,'research'],properties:{...turnSchema.properties,research:researchReportSchema}};
 const names={gpt:'GPT',claude:'Claude'};
 export const teamLabels={complete:'완료 합의',need_user:'사용자 결정 필요',budget_exhausted:'실행 예산 도달',stalled:'변경 없이 반복',cancelled:'사용자 중단',failed:'실행 실패'};
 const sensitiveName=/(^|\/)\.env(\.|$)|credential|secret|private.?key|\.pem$|\.key$/i;
@@ -35,7 +38,7 @@ async function openTeam(root,request,now){
 
 function promptFor(id,state,{turn,maxTurns,minutesLeft,request,fresh}){
   const name=names[id],other=names[id==='gpt'?'claude':'gpt'];
-  const system=`당신은 IDEAS 회의실의 ${name} 에이전트입니다. 다른 팀원 ${other} 에이전트와 교대로 하나의 프로젝트를 실제로 만듭니다. 사용자가 최종 의사결정자입니다.
+  let system=`당신은 IDEAS 회의실의 ${name} 에이전트입니다. 다른 팀원 ${other} 에이전트와 교대로 하나의 프로젝트를 실제로 만듭니다. 사용자가 최종 의사결정자입니다.
 
 작업 규칙
 - 현재 작업 폴더는 이 팀 전용 Git 작업 트리(브랜치 ${state.branch})입니다. 이 폴더 안의 파일만 만들고 고치세요. 폴더 밖, 계정 설정, 인증정보, .env는 읽거나 바꾸지 마세요.
@@ -52,6 +55,7 @@ function promptFor(id,state,{turn,maxTurns,minutesLeft,request,fresh}){
 - next: 다음 차례 팀원이 할 일. 없으면 빈 문자열.
 - question: need_user일 때 사용자에게 물을 질문. 아니면 빈 문자열.
 팀원이 done을 제안했으면 직접 확인한 뒤 동의(done)하거나 남은 문제를 지적(continue)하세요. 합리적인 가정으로 진행할 수 있으면 need_user 대신 가정을 기록하고 진행하세요.`;
+  if(request.teamFocus==='research')system+=researchInstructions();
   const entries=state.chat.filter(m=>fresh||m.seq>(state.seen[id]||0)).slice(-12);
   const chat=entries.map(m=>`[${m.speaker}${m.turn?` · ${m.turn}차`:''}] ${clip(m.text,3000)}`).join('\n\n')||'아직 없음';
   const files=(request.files||[]).length?`\n사용자가 참고로 고른 파일: ${request.files.join(', ')}`:'';
@@ -64,16 +68,21 @@ ${chat}
 
 당신의 지난 차례 이후 바뀐 커밋:
 ${state.changes||'없음'}
-자세한 변경은 git diff나 파일을 직접 확인하세요.`;
+자세한 변경은 git diff나 파일을 직접 확인하세요.
+${request.teamFocus==='research'?`연구 완료 기준: ${state.research?.feedback||'범위를 정하고 근거 조사부터 시작하세요.'}`:''}
+${fresh&&request.history.length>1?'이전 회의의 참고 대화(미검증 주장 포함, 출처를 다시 확인):\n'+clip(request.history.slice(0,-1).slice(-8).map(m=>m.speaker+': '+m.text).join('\n\n'),12000):''}`;
   return {system,user};
 }
 
-export async function runTeamWorkflow(request,emit,{env=process.env,invokeTeam=callTeamAgent,signal,projectRoot,now=Date.now}={}){
-  const budget=teamBudget(request.budget),started=now();
+export async function runTeamWorkflow(request,emit,{env=process.env,invokeTeam=callTeamAgent,signal,projectRoot,deliverableDir,now=Date.now}={}){
+  const budget=teamBudget(request.budget),started=now(),research=request.teamFocus==='research';
+  if(research&&budget.maxTurns<6)throw new Error('리서치·기획은 최소 6차례 예산이 필요합니다.');
   const deadline=AbortSignal.timeout(budget.minutes*60000),combined=signal?AbortSignal.any([signal,deadline]):deadline;
   let team;
   try{team=await openTeam(projectRoot,request,now);}catch(error){emit({type:'goal',speaker:'실행기',phase:'team',text:`팀 작업을 시작하지 못했습니다: ${error.message}`,status:'failed',final:true,calls:0,maxCalls:budget.maxTurns});emit({type:'done'});return;}
   const {state,stateFile,resumed}=team;state.failures??={};
+  if(research)state.research={checks:{},fingerprints:{},repeated:0,feedback:'두 사람의 독립 검토로 조사·대안·반론·보완·기획을 발전시키세요.'};
+  const exportId=research&&deliverableDir?await createDeliverable(deliverableDir,request):null;
   const save=()=>writeFile(stateFile,JSON.stringify({...state,chat:state.chat.slice(-40)},null,2),{mode:0o600});
   const say=async(speaker,text,turn)=>{state.seq++;state.chat.push({seq:state.seq,speaker,text,turn});await appendFile(state.log,`## ${speaker}${turn?` · ${turn}차`:''}\n\n${text}\n\n`);};
   const progress=text=>emit({type:'goal',speaker:'실행기',phase:'team',text,status:'running',id:state.id,calls:turn,maxCalls:budget.maxTurns});
@@ -89,7 +98,7 @@ export async function runTeamWorkflow(request,emit,{env=process.env,invokeTeam=c
       emit({type:'pending',provider:current,speaker:names[current],phase:'team',round:turn});
       let result;
       try{
-        result=await invokeTeam(current,promptFor(current,state,{turn,maxTurns:budget.maxTurns,minutesLeft,request,fresh}),{cwd:state.workspace,session:state.sessions[current],env,signal:combined,outputSchema:turnSchema,webSearch:request.webSearch===true,timeoutMs:Math.max(1000,Math.min(900000,budget.minutes*60000-(now()-started)))});
+        result=await invokeTeam(current,promptFor(current,state,{turn,maxTurns:budget.maxTurns,minutesLeft,request,fresh}),{cwd:state.workspace,session:state.sessions[current],env,signal:combined,outputSchema:research?researchTurnSchema:turnSchema,webSearch:request.webSearch===true,timeoutMs:Math.max(1000,Math.min(900000,budget.minutes*60000-(now()-started)))});
       }catch(error){
         if(combined.aborted)throw error;
         failures++;emit({type:'error',provider:current,speaker:names[current],phase:'team',round:turn,text:error.message});
@@ -112,14 +121,25 @@ export async function runTeamWorkflow(request,emit,{env=process.env,invokeTeam=c
       }
       state.heads[current]=await git(state.workspace,['rev-parse','HEAD']);state.seen[current]=state.seq+1;
       const u=state.usage[current]||={inputTokens:0,cachedInputTokens:0,outputTokens:0};for(const k of Object.keys(u))u[k]+=result.usage[k]||0;
-      await say(names[current],result.report.message+(result.report.next?`\n다음 부탁: ${result.report.next}`:''),state.turns);
+      await say(names[current],result.report.message+(research&&result.report.research?.delta?'\n이번 진전: '+clip(result.report.research.delta,1500):'')+(result.report.next?`\n다음 부탁: ${result.report.next}`:''),state.turns);
       const r=result.report;
+      let researchProgress;if(research)researchProgress=recordResearchProgress(state,current,r,changed);
       emit({type:'answer',provider:current,speaker:names[current],phase:'team',round:turn,mode:'subscription',model:result.model,inputTokens:result.usage.inputTokens,outputTokens:result.usage.outputTokens,
-        text:`${r.message}\n\n${changed?`변경 파일:\n${clip(changed,1500)}`:'파일 변경 없음'}${r.next?`\n다음 차례 부탁: ${r.next}`:''}${r.question?`\n사용자에게 질문: ${r.question}`:''}\n상태: ${{continue:'계속',done:'완료 제안',need_user:'사용자 결정 필요'}[r.status]} · ${current==='gpt'?`명령 ${result.actions.commands}회 · 파일 수정 ${result.actions.edits}건`:`작업 단계 ${result.actions.turns??'-'}회`} · 입력 토큰 ${result.usage.inputTokens}(캐시 ${result.usage.cachedInputTokens}) / 출력 ${result.usage.outputTokens}`});
+        text:`${r.message}${research&&r.research?.delta?'\n\n이번 차례의 새 근거·판단: '+clip(r.research.delta,1500):''}\n\n${changed?`변경 파일:\n${clip(changed,1500)}`:'파일 변경 없음'}${r.next?`\n다음 차례 부탁: ${r.next}`:''}${r.question?`\n사용자에게 질문: ${r.question}`:''}\n상태: ${{continue:'계속',done:'완료 제안',need_user:'사용자 결정 필요'}[r.status]} · ${current==='gpt'?`명령 ${result.actions.commands}회 · 파일 수정 ${result.actions.edits}건`:`작업 단계 ${result.actions.turns??'-'}회`} · 입력 토큰 ${result.usage.inputTokens}(캐시 ${result.usage.cachedInputTokens}) / 출력 ${result.usage.outputTokens}`});
       if(r.status==='need_user'){status='need_user';question=r.question||r.message;break;}
-      // Completion needs both agents: one proposes done, the other confirms without further changes.
-      if(r.status==='done'){if(doneBy&&doneBy!==current&&!changed){status='complete';break;}doneBy=current;}else doneBy=null;
-      quiet=changed?0:quiet+1;if(quiet>=3){status='stalled';break;}
+      // Research must cover the brief and produce evidence/analysis/proposal, rather than
+      // ending after a couple of agreeable replies or three turns without code changes.
+      let eligible=true;
+      if(research){
+        const missing=await researchArtifacts(state.workspace);
+        eligible=turn>=6&&!researchProgress.unchecked.length&&!missing.length;
+        state.research.feedback=[turn<6?`현재 ${turn}/최소6차례`:null,researchProgress.unchecked.length?'두 사람의 검토가 남은 항목: '+researchProgress.unchecked.map(k=>researchChecks[k]).join(', '):null,missing.length?'저장/보강할 자료: '+missing.join(', '):null].filter(Boolean).join(' · ')||'완료 기준 충족. 상대가 실제 자료를 확인하고 마지막 합의하세요.';
+        emit({type:'notice',text:`리서치 ${turn}/${budget.maxTurns}차례 · ${state.research.feedback}`});
+        if(researchProgress.repeated===4){await say('실행기','같은 주장과 다음 행동이 반복되고 있습니다. 조사 질문이나 대안의 방향을 바꾸고 새 근거를 찾으세요.');}
+        if(researchProgress.repeated>=6){status='stalled';question='새 파일·근거·판단 없이 같은 두 답변이 반복되어 중단했습니다.';break;}
+      }
+      if(r.status==='done'&&eligible){if(doneBy&&doneBy!==current&&!changed){status='complete';break;}doneBy=current;}else doneBy=null;
+      if(!research){quiet=changed?0:quiet+1;if(quiet>=3){status='stalled';break;}}
       current=current==='gpt'?'claude':'gpt';await save();
     }
   }catch(error){status=signal?.aborted?'cancelled':deadline.aborted?'budget_exhausted':'failed';question=error.message;}
@@ -128,7 +148,8 @@ export async function runTeamWorkflow(request,emit,{env=process.env,invokeTeam=c
     state.status=status;state.updatedAt=new Date(now()).toISOString();await save();
     let commits='?';try{commits=await git(state.workspace,['rev-list','--count',`${state.base}..HEAD`]);}catch{}
     const usage=Object.entries(state.usage).map(([id,u])=>`${names[id]} 입력 ${u.inputTokens}(캐시 ${u.cachedInputTokens}) / 출력 ${u.outputTokens}`).join(' · ')||'기록 없음';
-    const text=`팀 작업 종료 · ${teamLabels[status]}\n이번 실행: ${turn}/${budget.maxTurns}차례 · 경과 ${Math.ceil((now()-started)/60000)}분\n${status==='need_user'?`사용자 결정 필요: ${question}\n답을 입력하면 같은 팀이 이어서 작업합니다.\n`:status==='failed'&&question?`중단 사유: ${question}\n`:''}브랜치: ${state.branch} · 팀 커밋 ${commits}개 (원래 브랜치는 그대로입니다)\n작업 폴더: ${state.workspace}\n누적 토큰: ${usage}\n토큰 수는 CLI 보고값이며 구독의 남은 한도는 확인할 수 없습니다.`;
+    if(exportId){try{const files=await researchSnapshot(state.workspace);if(files.length)emit({type:'deliverable',...await saveVersion(deliverableDir,exportId,'final',{summary:`리서치·기획 공유본 · ${teamLabels[status]} · 미확인 사항과 다음 행동은 문서에 구분합니다.`,files},{status})});}catch{emit({type:'notice',text:'리서치 원본은 팀 작업 폴더에 보존됐지만 웹 공유본 저장에 실패했습니다. 파일 크기·비밀정보 검사와 저장 공간을 확인하세요.'});}}
+    const text=`팀 작업 종료 · ${teamLabels[status]}\n이번 실행: ${turn}/${budget.maxTurns}차례 · 경과 ${Math.ceil((now()-started)/60000)}분\n${status==='need_user'?`사용자 결정 필요: ${question}\n답을 입력하면 같은 팀이 이어서 작업합니다.\n`:status==='failed'&&question?`중단 사유: ${question}\n`:''}${research?`리서치 진행: ${state.research.feedback}\n`:''}브랜치: ${state.branch} · 팀 커밋 ${commits}개 (원래 브랜치는 그대로입니다)\n작업 폴더: ${state.workspace}\n누적 토큰: ${usage}\n토큰 수는 CLI 보고값이며 구독의 남은 한도는 확인할 수 없습니다.`;
     await say('실행기',text);await save();
     emit({type:'goal',speaker:'실행기',phase:'team',text,status,id:state.id,calls:turn,maxCalls:budget.maxTurns,final:true});emit({type:'done'});
   }

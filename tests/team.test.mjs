@@ -139,3 +139,38 @@ test('Windows Codex 팀 실행은 앱이 설정한 샌드박스 방식만 개인
   for(const platform of ['win32','darwin'])await callTeamAgent('gpt',{system:'s',user:'u'},{cwd:dir,env:{CODEX_HOME:dir,LOCAL_CODEX_BIN:'codex'},runner,outputSchema:turnSchema,platform});
   assert.ok(seen[0].includes('windows.sandbox="elevated"'));assert.ok(!seen[1].some(a=>a.startsWith('windows.')));assert.ok(!seen[0].includes('evil'));
 }));
+
+const allResearchChecks=()=>Object.fromEntries(['scope','evidence','alternatives','challenge','refinement','proposal'].map(k=>[k,true]));
+function researchTurn(message,status='continue',checks=allResearchChecks()){const result=turn(message,status);result.report.research={delta:message,checks};return result;}
+async function researchFiles(cwd){
+  await mkdir(path.join(cwd,'research'),{recursive:true});
+  await writeFile(path.join(cwd,'research','sources.md'),'# 근거\nhttps://official.example/one\nhttps://official.example/two\n'+('자료별 확인 날짜와 실제 확인 범위를 기록합니다.\n'.repeat(12)));
+  for(const name of ['analysis','proposal'])await writeFile(path.join(cwd,'research',name+'.md'),'# '+name+'\n'+('여러 대안과 반론을 검토하고 가정을 기록한 기획 초안입니다.\n'.repeat(12)));
+}
+test('리서치는 파일 변경 없는 새 근거·반론을 3차례로 끊지 않고 최소 검토와 실제 자료 뒤 합의함',async()=>fixture(async dir=>{
+  const root=await project(dir),agents=Array.from({length:7},(_,i)=>async(id,p,o)=>{if(i===3)await researchFiles(o.cwd);return researchTurn(`새 근거와 반론 ${i} 확인`,'done');});
+  const result=await run(root,request('앱을 비교하고 대상을 조사해 기획해줘',{teamFocus:'research',history:[{speaker:'GPT',text:'이전 짧은 토론의 미검증 아이디어'},{speaker:'사용자',text:'심화 조사해줘'}],budget:{minutes:10,maxTurns:8}}),agents);
+  assert.equal(result.final.status,'complete');assert.equal(result.calls.length,7);assert.equal(result.calls[0].options.outputSchema.properties.research.type,'object');assert.match(result.calls[0].prompt.system,/리서치·기획/);assert.match(result.calls[1].prompt.user,/이전 짧은 토론의 미검증 아이디어/);assert.match(result.calls[4].prompt.user,/최소6차례/);
+  const state=JSON.parse(await readFile(path.join(root,'.ideas/team/state.json'),'utf8'));assert.ok(state.research.checks.gpt.proposal);assert.ok(state.research.checks.claude.proposal);
+}));
+test('단순 완료 선언 두 개로 리서치를 끝내지 않고 자료·상대 검토가 없으면 예산 종료함',async()=>fixture(async dir=>{
+  const root=await project(dir);
+  const result=await run(root,request('리서치',{teamFocus:'research'}),Array.from({length:6},(_,i)=>async()=>researchTurn(`서로 다른 진행 ${i}`,'done')));
+  assert.equal(result.calls.length,6);assert.equal(result.final.status,'budget_exhausted');assert.match(result.final.text,/research\/sources.md/);
+}));
+test('한 참가자의 미확인 항목이 남으면 파일이 있어도 완료하지 않음',async()=>fixture(async dir=>{
+  const root=await project(dir);const result=await run(root,request('리서치',{teamFocus:'research',budget:{minutes:10,maxTurns:8}}),Array.from({length:8},(_,i)=>async(id,p,o)=>{if(i===0)await researchFiles(o.cwd);return researchTurn(`조사 ${i}`,'done',{...allResearchChecks(),challenge:id==='claude'});}));
+  assert.equal(result.final.status,'budget_exhausted');assert.match(result.final.text,/상대 주장 반박/);
+}));
+test('리서치 내용까지 그대로 반복하면 방향 전환을 요청한 후 유한하게 종료함',async()=>fixture(async dir=>{
+  const root=await project(dir);const result=await run(root,request('리서치',{teamFocus:'research',budget:{minutes:10,maxTurns:12}}),Array.from({length:8},()=>async()=>researchTurn('똑같은 근거와 주장')));
+  assert.equal(result.calls.length,8);assert.equal(result.final.status,'stalled');const state=JSON.parse(await readFile(path.join(root,'.ideas/team/state.json'),'utf8'));assert.match(await readFile(state.log,'utf8'),/방향을 바꾸고/);
+}));
+test('리서치 목적과 너무 짧은 예산을 요청 단계에서 검증함',()=>{
+  assert.throws(()=>validateRequest(request('x',{teamFocus:'unknown'})));assert.throws(()=>validateRequest(request('x',{teamFocus:'research',budget:{minutes:10,maxTurns:4}})),/최소6차례/);
+});
+test('리서치 결과를 웹의 저장된 파일 결과에서 읽을 수 있도록 공유본으로 내보냄',async()=>fixture(async dir=>{
+  const root=await project(dir),output=path.join(root,'outputs'),events=[];let turns=0;
+  await runTeamWorkflow(request('공유 가능한 리서치',{teamFocus:'research',budget:{minutes:10,maxTurns:8}}),e=>events.push(e),{projectRoot:root,deliverableDir:output,invokeTeam:async(id,p,o)=>{turns++;if(turns===1)await researchFiles(o.cwd);return researchTurn('확인 '+turns,'done');}});
+  const saved=events.find(e=>e.type==='deliverable');assert.ok(saved);assert.equal(saved.files.length,3);const {readDeliverable}=await import('../deliverables.mjs');assert.match(await readDeliverable(output,saved.id,'final','research/proposal.md'),/기획 초안/);assert.equal(events.at(-1).type,'done');
+}));
