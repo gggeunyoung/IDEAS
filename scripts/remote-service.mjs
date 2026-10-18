@@ -1,7 +1,9 @@
+import {randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile,rename} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {createTunnelSupervisor} from './tunnel-supervisor.mjs';
 import {loadGoogleSettings} from '../google-login.mjs';
 import {prepareRemoteSecrets,createRemoteWorker} from '../remote-worker.mjs';
 import {createServer} from '../server.mjs';
@@ -20,17 +22,11 @@ async function ensureLocalServer(){
 await ensureLocalServer();
 const preview=createPreviewServer();await new Promise((resolve,reject)=>{preview.once('error',reject);preview.listen(3032,'127.0.0.1',resolve);});console.log('맥 시제품 미리보기 서버 시작 · 127.0.0.1:3032');
 const worker=await createRemoteWorker({secrets,googleSettings:await loadGoogleSettings(path.join(runtime,'google-login.json'))});await new Promise(resolve=>worker.listen(3031,'127.0.0.1',resolve));
-let tunnel,url,registered=false,retryTimer,registerTimer,healthTimer;
-async function register(){
-  if(!url||registered||stopping)return;
-  try{const response=await fetch(origin+'/api/worker/register',{method:'POST',redirect:'error',headers:{Authorization:'Bearer '+secrets.bridgeToken,'Content-Type':'application/json'},body:JSON.stringify({url}),signal:AbortSignal.timeout(25000)});if(!response.ok)throw new Error();registered=true;await writeFile(path.join(runtime,'remote-connection.json'),JSON.stringify({url,origin,registeredAt:new Date().toISOString()}),{mode:0o600});console.log('Vercel에 맥 워커 연결 완료');}catch{console.log('Vercel 연결 등록 대기 중 · 15초 후 재시도');}
-}
-function startTunnel(){
-  registered=false;url=null;
-  tunnel=spawn(path.join(root,'.local-tools','cloudflare','cloudflared'),['tunnel','--no-autoupdate','--url','http://127.0.0.1:3031','--http-host-header','127.0.0.1:3031'],{cwd:root,stdio:['ignore','ignore','pipe']});
-  let buffer='';tunnel.stderr.on('data',chunk=>{buffer+=chunk.toString();const match=/https:\/\/[a-z0-9-]+\.trycloudflare\.com/.exec(buffer);if(match&&!url){url=match[0];console.log('인증된 맥 중계 연결 시작 · 등록 중');void register();}buffer=buffer.slice(-8000);});
-  tunnel.on('error',()=>console.log('cloudflared 실행 실패 · npm run setup:tunnel을 확인하세요.'));
-  tunnel.on('exit',()=>{if(!stopping){console.log('맥 중계 연결 종료 · 5초 후 다시 연결');retryTimer=setTimeout(startTunnel,5000);}});
-}
-function stop(){if(stopping)return;stopping=true;clearTimeout(retryTimer);clearInterval(registerTimer);clearInterval(healthTimer);tunnel?.kill();worker.close();preview.close();localServer?.close();}
-process.on('SIGTERM',stop);process.on('SIGINT',stop);startTunnel();registerTimer=setInterval(()=>void register(),15000);healthTimer=setInterval(()=>{if(!stopping)void ensureLocalServer();},15000);console.log('IDEAS 원격 서비스 시작 · 맥은 켜져 있고 잠자기가 해제돼 있어야 합니다.');
+const supervisor=createTunnelSupervisor({origin,bridgeToken:secrets.bridgeToken,
+  spawnTunnel:()=>spawn(path.join(root,'.local-tools','cloudflare','cloudflared'),['tunnel','--no-autoupdate','--url','http://127.0.0.1:3031','--http-host-header','127.0.0.1:3031'],{cwd:root,stdio:['ignore','ignore','pipe']}),
+  saveConnection:async connection=>{const target=path.join(runtime,'remote-connection.json'),temp=target+'.'+randomUUID()+'.tmp';await writeFile(temp,JSON.stringify(connection),{mode:0o600});await rename(temp,target);},
+  log:message=>console.log(new Date().toISOString()+' '+message)
+});
+let healthTimer;
+function stop(){if(stopping)return;stopping=true;clearInterval(healthTimer);supervisor.stop();worker.close();preview.close();localServer?.close();}
+process.on('SIGTERM',stop);process.on('SIGINT',stop);supervisor.start();healthTimer=setInterval(()=>{if(!stopping){void ensureLocalServer();void supervisor.tick().catch(()=>console.log('중계 점검 실패 · 다음 점검에서 재시도'));}},30000);console.log('IDEAS 원격 서비스 시작 · 맥은 켜져 있고 잠자기가 해제돼 있어야 합니다.');

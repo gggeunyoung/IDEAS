@@ -128,3 +128,18 @@ test('proxy allows only Google bootstrap routes without session and enforces sam
   const cookie='__Host-ideas_google='+'a'.repeat(43);const response=await fetch(url+'/api/auth/google',{method:'POST',headers:{Origin:'https://ideas.example','Content-Type':'application/json',Cookie:cookie},body:'{"credential":"test-token"}'});assert.equal(response.status,200);assert.equal(forwarded.headers.Cookie,cookie);assert.equal(calls,2);assert.match(response.headers.get('set-cookie'),/HttpOnly; Secure/);
   assert.equal((await fetch(url+'/api/auth/google')).status,405);assert.equal((await fetch(url+'/api/auth/config',{method:'POST'})).status,405);
 });
+test('worker health requires bridge auth and bypasses user sessions without consuming login challenges',async t=>{
+  const f=await workerFixture(t,()=>assert.fail('health must not reach project server'));
+  assert.equal((await f.request('/api/worker/health',{bridge:'wrong'})).status,401);
+  const a=await f.request('/api/worker/health'),b=await f.request('/api/worker/health');assert.equal(a.status,200);const first=await a.json();assert.equal(first.healthy,true);assert.ok(first.instanceId);assert.equal((await b.json()).instanceId,first.instanceId);assert.equal(a.headers.get('set-cookie'),null);
+  await f.restart();assert.notEqual((await (await f.request('/api/worker/health')).json()).instanceId,first.instanceId);
+});
+test('public health route accepts only bridge bearer authentication and GET',async t=>{
+  let calls=0;const server=http.createServer(createRemoteProxy({env:{IDEAS_BRIDGE_TOKEN:'bridge',IDEAS_WORKER_URL:'https://test.trycloudflare.com'},fetchImpl:async(url,options)=>{calls++;assert.ok(String(url).endsWith('/api/worker/health'));assert.equal(options.headers.Authorization,'Bearer bridge');return new Response('{"healthy":true,"instanceId":"worker-1"}');}}));const url=await listen(server);t.after(()=>close(server));
+  assert.equal((await fetch(url+'/api/worker/health')).status,401);assert.equal((await fetch(url+'/api/worker/health',{headers:{Authorization:'Bearer wrong'}})).status,401);assert.equal((await fetch(url+'/api/worker/health',{method:'POST',headers:{Authorization:'Bearer bridge'}})).status,401);assert.equal(calls,0);
+  const response=await fetch(url+'/api/worker/health',{headers:{Authorization:'Bearer bridge'}});assert.equal(response.status,200);assert.equal((await response.json()).healthy,true);assert.equal(calls,1);
+});
+test('authenticated GitHub account route added on Windows reaches the worker through the same proxy',async t=>{
+  let calls=0;const server=http.createServer(createRemoteProxy({env:{IDEAS_BRIDGE_TOKEN:'bridge',IDEAS_WORKER_URL:'https://test.trycloudflare.com'},fetchImpl:async url=>{calls++;assert.ok(String(url).endsWith('/api/github'));return new Response('{"available":true}');}}));const url=await listen(server);t.after(()=>close(server));
+  assert.equal((await fetch(url+'/api/github')).status,401);assert.equal(calls,0);assert.equal((await fetch(url+'/api/github',{headers:{Cookie:'__Host-ideas_session='+'a'.repeat(43)}})).status,200);assert.equal(calls,1);
+});

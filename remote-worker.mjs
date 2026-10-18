@@ -25,6 +25,7 @@ export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:303
   if(!secrets?.bridgeToken||!secrets?.passwordHash||!secrets?.salt)throw new Error('원격 인증 설정이 필요합니다.');
   const local=new URL(localUrl);if(local.protocol!=='http:'||local.hostname!=='127.0.0.1'||local.pathname!=='/')throw new Error('로컬 서버 주소가 올바르지 않습니다.');
   const google=createGoogleLogin({...googleSettings,verifyToken:verifyGoogleToken});
+  const instanceId=randomUUID();
   const sessions=new Map(),jobs=new Map(),controllers=new Map();let active=null,loginAttempts=[];
   await mkdir(directory,{recursive:true,mode:0o700});
   const store=persistJob||async function(job){const file=path.join(directory,job.id+'.json'),temp=file+'.'+randomUUID();await writeFile(temp,JSON.stringify(job),{mode:0o600});await rename(temp,file);};
@@ -58,6 +59,7 @@ export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:303
     if(!equal(req.headers.authorization,'Bearer '+secrets.bridgeToken))return send(401,{error:'중계 인증이 필요합니다.'});
     const url=new URL(req.url,'http://worker'),route=url.pathname;
     try{
+      if(req.method==='GET'&&route==='/api/worker/health')return send(200,{healthy:true,instanceId});
       if(req.method==='POST'&&!req.headers['content-type']?.startsWith('application/json'))return send(415,{error:'JSON 요청이 필요합니다.'});
       if(req.method==='GET'&&route==='/api/auth/config'){try{const config=google.challenge();return send(200,config.body,config.cookie?{'Set-Cookie':config.cookie}:{});}catch(error){return send(error.status||503,{error:error.message});}}
       if(req.method==='POST'&&['/api/auth/login','/api/auth/google'].includes(route)){

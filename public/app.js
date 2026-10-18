@@ -199,10 +199,10 @@ function loadGoogleScript(){
 }
 async function prepareGoogleLogin(force=false){
   if(localServer||googlePreparing||googlePrepared&&!force)return;
-  googlePreparing=true;$('google-retry').hidden=true;
+  googlePreparing=true;googlePrepared=false;$('google-retry').hidden=true;$('google-login').hidden=false;$('google-button').replaceChildren();$('google-status').textContent='맥 워커 연결과 Google 로그인 설정을 확인하고 있습니다.';
   try{
     const response=await fetch('/api/auth/config');const auth=await response.json();if(!response.ok)throw new Error(auth.error||'로그인 설정을 읽지 못했습니다.');
-    if(!auth.google?.enabled){$('google-status').textContent='Google 로그인 연결 준비 중입니다. 현재는 회의실 비밀번호로 로그인하세요.';return;}
+    if(!auth.google?.enabled){$('google-login').hidden=true;$('google-status').textContent='Google 로그인 연결 준비 중입니다. 현재는 회의실 비밀번호로 로그인하세요.';return;}
     $('google-login').hidden=false;$('google-status').textContent='Google 로그인 버튼을 준비하고 있습니다.';
     await loadGoogleScript();window.google.accounts.id.initialize({client_id:auth.google.clientId,nonce:auth.google.nonce,auto_select:false,callback:async result=>{
       $('google-status').textContent='Google 계정을 확인하고 있습니다.';
@@ -211,7 +211,7 @@ async function prepareGoogleLogin(force=false){
     }});
     $('google-button').replaceChildren();window.google.accounts.id.renderButton($('google-button'),{type:'standard',theme:'outline',size:'large',text:'signin_with',locale:'ko',width:280});
     $('password-fallback').open=false;googlePrepared=true;$('google-status').textContent='내 Google 계정을 선택하세요. 로그인 요청은 10분 동안 유효합니다.';
-  }catch(error){$('google-status').textContent=error.message;$('google-retry').hidden=false;}
+  }catch(error){$('google-status').textContent=error.message;$('google-retry').textContent='회의실 연결 다시 확인';$('google-retry').hidden=false;}
   finally{googlePreparing=false;}
 }
 $('google-retry').onclick=()=>prepareGoogleLogin(true);
