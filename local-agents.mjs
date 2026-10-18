@@ -5,6 +5,7 @@ import {tmpdir,homedir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {catalog} from './providers.mjs';
+import {createActivityReporter} from './agent-activity.mjs';
 
 const root=path.dirname(fileURLToPath(import.meta.url));
 const bundledCodex='/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex';
@@ -40,7 +41,7 @@ export async function executableFor(id,env=process.env,platform=process.platform
   return path.join(root,'.local-tools','node_modules','.bin',id==='claude'?'claude':'gemini');
 }
 
-export function runProcess(command,args,{cwd,env,input='',signal,timeout=90000,limit=2_000_000}={}) {
+export function runProcess(command,args,{cwd,env,input='',signal,timeout=90000,limit=2_000_000,onStdout}={}) {
   return new Promise((resolve,reject)=>{
     let stdout='',stderr='',bytes=0,reason,finished=false,killTimer;
     const child=spawn(command,args,{cwd,env,stdio:['pipe','pipe','pipe'],shell:false,detached:process.platform!=='win32',windowsHide:true});
@@ -53,7 +54,7 @@ export function runProcess(command,args,{cwd,env,input='',signal,timeout=90000,l
     for(const [stream,key] of [[child.stdout,'stdout'],[child.stderr,'stderr']]){stream.setEncoding('utf8');stream.on('data',chunk=>{
       bytes+=Buffer.byteLength(chunk);
       if(bytes>limit){if(!reason){reason=new Error('CLI 출력 한도를 초과했습니다.');kill();}return;}
-      if(key==='stdout')stdout+=chunk;else stderr+=chunk;
+      if(key==='stdout'){stdout+=chunk;onStdout?.(chunk);}else stderr+=chunk;
     });}
     child.on('close',code=>{if(finished)return;cleanup();if(reason)reject(reason);else resolve({stdout,stderr,code});});
     child.stdin.on('error',()=>{});child.stdin.end(input);
@@ -135,7 +136,7 @@ export async function localStatus({env=process.env,runner=runProcess}={}) {
   }));
 }
 
-export async function callLocalAgent(id,prompt,{env=process.env,signal,runner=runProcess,webSearch=false,outputSchema,maxChars=1500,timeoutMs}={}) {
+export async function callLocalAgent(id,prompt,{env=process.env,signal,runner=runProcess,webSearch=false,outputSchema,maxChars=1500,timeoutMs,onActivity}={}) {
   if(timeoutMs!=null&&(!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>600000))throw new Error('CLI 호출 제한 시간이 올바르지 않습니다.');
   const p=catalog.find(p=>p.id===id);if(!p)throw new Error('알 수 없는 참가자입니다.');
   if(id==='gemini')throw new Error('Google 개인 계정의 Gemini CLI 지원이 종료됐습니다. 구독 연결은 Antigravity CLI로 전환해야 합니다. API로 대체하지 않았습니다.');
@@ -151,7 +152,7 @@ export async function callLocalAgent(id,prompt,{env=process.env,signal,runner=ru
       if(id==='gpt'){const schemaPath=path.join(directory,'output-schema.json');await writeFile(schemaPath,JSON.stringify(outputSchema),{mode:0o600});args.splice(args.length-1,0,'--output-schema',schemaPath);}
       else{args.push('--json-schema',JSON.stringify(outputSchema));args[args.indexOf('--max-turns')+1]='6';}
     }
-    const result=await runner(command,args,{cwd:directory,env:clean,input:`${prompt.system}\n\n최종 답변은 최대 ${maxChars}자. ${toolInstruction}\n\n${prompt.user}`,signal,timeout:timeoutMs??(outputSchema?180000:webSearch?120000:90000)});
+    const result=await runner(command,args,{cwd:directory,env:clean,input:`${prompt.system}\n\n최종 답변은 최대 ${maxChars}자. ${toolInstruction}\n\n${prompt.user}`,signal,timeout:timeoutMs??(outputSchema?180000:webSearch?120000:90000),onStdout:createActivityReporter(id,onActivity)});
     if(result.code!==0)throw new Error(`${p.name} CLI 호출 실패. 계정 로그인·구독 한도·CLI 설정을 확인하세요. API로 대체하지 않았습니다.`);
     const parsed=parseLocalAnswer(id,result.stdout);
     if(outputSchema&&id==='gpt'){const items=result.stdout.trim().split('\n').flatMap(line=>{try{return [JSON.parse(line)];}catch{return [];}});parsed.text=items.filter(e=>e.type==='item.completed'&&e.item?.type==='agent_message').at(-1)?.item.text||parsed.text;}
@@ -190,7 +191,7 @@ export function parseTeamTurn(id,raw){
     // Reconnect warnings are reported as error events even when the turn later completes.
     if(!completed)failed=true;
   }else{
-    let data;try{data=JSON.parse(raw);}catch{throw new Error('Claude CLI 응답 형식을 읽지 못했습니다. CLI 버전을 확인하세요.');}
+    let data;try{data=JSON.parse(raw);}catch{try{data=raw.trim().split('\n').map(line=>JSON.parse(line)).findLast(e=>e.type==='result');}catch{}if(!data)throw new Error('Claude CLI 응답 형식을 읽지 못했습니다. CLI 버전을 확인하세요.');}
     session=data.session_id;model=data.model;
     const u=data.usage||{};usage.inputTokens=(u.input_tokens||0)+(u.cache_read_input_tokens||0)+(u.cache_creation_input_tokens||0);usage.cachedInputTokens=u.cache_read_input_tokens||0;usage.outputTokens=u.output_tokens||0;
     actions.turns=data.num_turns;
@@ -204,7 +205,7 @@ export function parseTeamTurn(id,raw){
   for(const key of ['message','next','question'])report[key]=typeof report[key]==='string'?report[key].slice(0,4000):'';
   return {session,report,usage,actions,model};
 }
-export async function callTeamAgent(id,prompt,{cwd,session,env=process.env,signal,runner=runProcess,outputSchema,webSearch=false,timeoutMs=900000,platform=process.platform}={}){
+export async function callTeamAgent(id,prompt,{cwd,session,env=process.env,signal,runner=runProcess,outputSchema,webSearch=false,timeoutMs=900000,platform=process.platform,onActivity}={}){
   if(!['gpt','claude'].includes(id))throw new Error('팀 모드는 GPT·Claude 구독 에이전트만 지원합니다.');
   const p=catalog.find(p=>p.id===id),clean=subscriptionEnv(env),command=await executableFor(id,env),model=env[`LOCAL_${id.toUpperCase()}_MODEL`];
   // Agents test with the same Node as the room server, even when a service or app PATH lacks it.
@@ -219,9 +220,9 @@ export async function callTeamAgent(id,prompt,{cwd,session,env=process.env,signa
     }else{
       claudeSession=session||randomUUID();
       const tools=webSearch?[...claudeTeamAllowed,'WebSearch','WebFetch']:claudeTeamAllowed;
-      args=['--print','--output-format','json',session?'--resume':'--session-id',claudeSession,'--permission-mode','acceptEdits','--tools',`Read,Edit,Write,Glob,Grep,Bash${webSearch?',WebSearch,WebFetch':''}`,'--allowedTools',tools.join(','),'--disallowedTools','mcp__*','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--safe-mode','--disable-slash-commands','--setting-sources','','--settings','{"disableAllHooks":true,"forceLoginMethod":"claudeai"}','--max-turns','80','--json-schema',JSON.stringify(outputSchema),...(model?['--model',model]:[])];
+      args=['--print','--output-format','stream-json','--verbose','--include-partial-messages',session?'--resume':'--session-id',claudeSession,'--permission-mode','acceptEdits','--tools',`Read,Edit,Write,Glob,Grep,Bash${webSearch?',WebSearch,WebFetch':''}`,'--allowedTools',tools.join(','),'--disallowedTools','mcp__*','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--safe-mode','--disable-slash-commands','--setting-sources','','--settings','{"disableAllHooks":true,"forceLoginMethod":"claudeai"}','--max-turns','80','--json-schema',JSON.stringify(outputSchema),...(model?['--model',model]:[])];
     }
-    const result=await runner(command,args,{cwd,env:clean,input:`${prompt.system}\n\n${prompt.user}`,signal,timeout:timeoutMs,limit:20_000_000});
+    const result=await runner(command,args,{cwd,env:clean,input:`${prompt.system}\n\n${prompt.user}`,signal,timeout:timeoutMs,limit:20_000_000,onStdout:createActivityReporter(id,onActivity)});
     if(result.code!==0&&id==='claude')throw new Error(`${p.name} CLI 호출 실패. 계정 로그인·구독 한도·CLI 설정을 확인하세요. API로 대체하지 않았습니다.`);
     const parsed=parseTeamTurn(id,result.stdout);
     return {provider:id,speaker:p.name,...parsed,session:parsed.session||claudeSession||session,model:parsed.model||model||`${p.name} CLI 기본 모델`,billing:'subscription',costUSD:null};

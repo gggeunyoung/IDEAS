@@ -98,7 +98,7 @@ export async function runTeamWorkflow(request,emit,{env=process.env,invokeTeam=c
       emit({type:'pending',provider:current,speaker:names[current],phase:'team',round:turn});
       let result;
       try{
-        result=await invokeTeam(current,promptFor(current,state,{turn,maxTurns:budget.maxTurns,minutesLeft,request,fresh}),{cwd:state.workspace,session:state.sessions[current],env,signal:combined,outputSchema:research?researchTurnSchema:turnSchema,webSearch:request.webSearch===true,timeoutMs:Math.max(1000,Math.min(900000,budget.minutes*60000-(now()-started)))});
+        result=await invokeTeam(current,promptFor(current,state,{turn,maxTurns:budget.maxTurns,minutesLeft,request,fresh}),{onActivity:activity=>emit({type:'activity',provider:current,speaker:names[current],phase:'team',round:turn,...activity}),cwd:state.workspace,session:state.sessions[current],env,signal:combined,outputSchema:research?researchTurnSchema:turnSchema,webSearch:request.webSearch===true,timeoutMs:Math.max(1000,Math.min(900000,budget.minutes*60000-(now()-started)))});
       }catch(error){
         if(combined.aborted)throw error;
         failures++;emit({type:'error',provider:current,speaker:names[current],phase:'team',round:turn,text:error.message});

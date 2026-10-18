@@ -47,6 +47,7 @@ test('remote jobs continue after submit disconnect, reject duplicates and resume
   assert.equal((await f.request('/api/jobs',{cookie,body:{...body,request:{different:true}}})).status,409);
   assert.equal((await f.request('/api/jobs',{cookie,body:{...body,id:randomUUID()}})).status,409);
   const result=await eventually(async()=>{const job=await (await f.request('/api/jobs/'+id,{cookie})).json();return job.status==='done'&&job;});assert.equal(calls,1);assert.equal(result.events[0].text,'result');assert.equal(result.history[0].text,'test');
+  assert.ok(Number.isFinite(Date.parse(result.createdAt)));assert.ok(Number.isFinite(Date.parse(result.finishedAt)));assert.ok(Number.isFinite(Date.parse(result.checkedAt)));
   const completedCancel=await (await f.request('/api/jobs/'+id+'/cancel',{cookie,body:{}})).json();assert.deepEqual(completedCancel,{cancelled:false,status:'done'});
   assert.deepEqual((await (await f.request('/api/jobs/'+id+'?after=1',{cookie})).json()).events,[{type:'done'}]);
   await f.restart();cookie=await f.login();assert.equal((await (await f.request('/api/jobs/'+id,{cookie})).json()).status,'done');

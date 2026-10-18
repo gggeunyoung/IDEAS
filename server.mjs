@@ -27,7 +27,7 @@ export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,stat
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
     const url=new URL(req.url,`http://${host}`),route=url.pathname;
     const send=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));};
-    if(req.method==='GET'&&['/','/app.js','/style.css'].includes(route)){
+    if(req.method==='GET'&&['/','/app.js','/progress.js','/style.css'].includes(route)){
       const name=route==='/'?'index.html':route.slice(1);
       res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
       try{const data=await readFile(new URL(`./public/${name}`,import.meta.url));res.writeHead(200,{'Content-Type':name.endsWith('.js')?'text/javascript; charset=utf-8':name.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8'});return res.end(data);}catch{return send(404,{error:'파일을 찾을 수 없습니다.'});}
@@ -78,13 +78,14 @@ export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,stat
       const messages=request.workflow==='team'?[...saved,{...request.history.at(-1),mode:request.mode,workflow:request.workflow}]:request.history.map((m,index)=>{const previous=saved[index];return previous&&previous.speaker===m.speaker&&previous.text===m.text?previous:{...m,mode:request.mode,workflow:request.workflow};});await saveSession(room.root,messages);
       res.on('close',()=>{if(!res.writableEnded)controller.abort();});res.writeHead(200,{'Content-Type':'application/x-ndjson; charset=utf-8'});
       const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(request.workflow==='team'?teamBudget(request.budget).minutes*60000+30000:request.workflow==='goal'?goalBudget(request.budget).minutes*60000+30000:request.workflow==='files'?600000:request.mode==='subscription'?300000:120000)]);
-      const events=[];let completed=false;
-      const emit=event=>{if(!res.destroyed)res.write(JSON.stringify(event)+'\n');};
-      await runMeeting(request,event=>{
-        events.push(event);if(['answer','error','goal'].includes(event.type)){messages.push({...event,mode:request.mode,workflow:request.workflow,error:event.type==='error'});const snapshot=JSON.parse(JSON.stringify(messages));persist=persist.then(()=>saveSession(room.root,snapshot));}
+      const events=[];let completed=false;let heartbeat;
+      const emit=event=>{if(!res.destroyed)res.write(JSON.stringify({at:new Date().toISOString(),...event})+'\n');};
+      heartbeat=setInterval(()=>emit({type:'heartbeat'}),15000);heartbeat.unref();
+      try{await runMeeting(request,event=>{
+        event={at:new Date().toISOString(),...event};if(event.type!=='activity')events.push(event);if(['answer','error','goal'].includes(event.type)){messages.push({...event,mode:request.mode,workflow:request.workflow,error:event.type==='error'});const snapshot=JSON.parse(JSON.stringify(messages));persist=persist.then(()=>saveSession(room.root,snapshot));}
         if(event.type==='deliverable')event={...event,url:scopeUrl(event.url,room),files:event.files.map(f=>({...f,url:scopeUrl(f.url,room)}))};
         if(event.type==='done')completed=true;else emit(event);
-      },{env,invoke,invokeLocal,invokeTeam,signal,context,deliverableDir:dirs.deliverableDir,projectRoot:room.root});
+      },{env,invoke,invokeLocal,invokeTeam,signal,context,deliverableDir:dirs.deliverableDir,projectRoot:room.root});}finally{clearInterval(heartbeat);}
       await persist;
       if(completed){try{const artifact=await saveArtifact(dirs.artifactDir,request,events);emit({type:'artifact',...artifact,url:scopeUrl(artifact.url,room)});}catch{emit({type:'notice',text:'회의록 파일 저장에 실패했습니다. 브라우저에서 내보내세요.'});}emit({type:'done'});}
       res.end();
