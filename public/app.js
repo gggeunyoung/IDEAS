@@ -203,8 +203,8 @@ async function loadRooms(){
   for(const room of rooms){const card=document.createElement('article');card.className='room-card';const kind=document.createElement('span');kind.className='room-kind';kind.textContent=room.kind==='platform'?'회의실 프로그램 개발':'프로젝트 작업 공간';const title=document.createElement('h2');title.textContent=room.name;const root=document.createElement('code');root.textContent=room.root;const status=document.createElement('p');status.textContent=room.git.branch?`${room.git.branch} · 변경 ${room.git.changes}개 · ${room.git.commit}`:'Git 상태 확인 필요';card.append(kind,title,root,status);if(room.repo){const repo=document.createElement('a');repo.href=room.repo;repo.target='_blank';repo.rel='noopener noreferrer';repo.textContent=room.repo.replace('https://github.com/','');card.append(repo);}const button=document.createElement('button');button.textContent='회의실 열기 →';button.onclick=()=>openRoom(room.id);card.append(button);$('room-grid').append(card);}
   $('dashboard-status').textContent=`연결된 회의실 ${rooms.length}개 · 방마다 자료·대화·결과가 분리됩니다.`;$('worker-state').textContent=localServer?'로컬 맥 워커 연결됨':'원격 맥 워커 연결됨';
 }
-async function openRoom(id,{autoResume=true}={}){
-  if(running)return;executionProgress=null;renderProgress();currentRoom=id;config=null;$('dashboard').hidden=true;$('room-view').hidden=false;$('artifact').hidden=true;$('message').value='';location.hash='room='+id;
+async function openRoom(id,{autoResume=true,allowRunning=false}={}){
+  if(running&&!allowRunning)return;executionProgress=null;renderProgress();currentRoom=id;config=null;$('dashboard').hidden=true;$('room-view').hidden=false;$('artifact').hidden=true;$('message').value='';location.hash='room='+id;
   const room=rooms.find(r=>r.id===id);if(room.kind==='project'&&preferences.workflowVersion!==2){$('workflow').value='team';$('team-focus').value='research';$('web-search').checked=true;}else if(room.kind!=='project'&&$('workflow').value==='team')$('workflow').value='discuss';$('room-title').textContent=room.name;$('active-room-name').textContent=room.name;$('active-room-path').textContent=room.root;$('git-state').textContent=room.git.branch?`${room.git.branch} · 변경 ${room.git.changes}개`:'Git 상태 확인 필요';
   try{const response=await api('/api/session');if(!response.ok)throw new Error();messages=(await response.json()).messages;if(!messages.length){const key=id==='platform'?'ideas-room':'ideas-room:'+id;try{messages=JSON.parse(localStorage.getItem(key)||'[]');}catch{messages=[];}}}catch{messages=[];$('status').textContent='저장된 대화를 읽지 못했습니다.';}
   try{artifactLink(JSON.parse(localStorage.getItem('ideas-artifact:'+id)||(id==='platform'?localStorage.getItem('ideas-artifact'):'null')||'null'));}catch{}
@@ -276,11 +276,11 @@ $('room-form').onsubmit=async event=>{event.preventDefault();if(running)return;
 $('save-project').onclick=async()=>{if(running)return;state(true);$('stop').hidden=true;$('status').textContent='맥에서 이 프로젝트의 대화·결과를 검사하고 커밋·푸시하고 있습니다.';try{let data;if(localServer){const response=await api('/api/room-save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roomId:currentRoom})});data=await response.json();if(!response.ok)throw new Error(data.error);}else data=await submitRemoteJob('save-room',{roomId:currentRoom});$('status').textContent=`GitHub 저장 완료 · ${data.branch} · ${data.commit} · 변경 파일 ${data.files}개`;await loadRooms();const room=rooms.find(r=>r.id===currentRoom);$('git-state').textContent=`${room.git.branch} · 변경 ${room.git.changes}개 · ${room.git.commit}`;}catch(error){$('status').textContent=error.message;}finally{state(false);}};
 let resumingJob=false;
 async function resumeMeetingJob(id,open=true){
-  if(running||resumingJob)return;resumingJob=true;
+  if(running||resumingJob)return;resumingJob=true;state(true);
   try{
     const job=await remoteJson(`/api/jobs/${id}?after=0`);
     if(job.type==='meeting'){
-      if(open){await loadRooms();await openRoom(job.roomId,{autoResume:false});}
+      if(open){await loadRooms();await openRoom(job.roomId,{autoResume:false,allowRunning:true});}
       messages=replayHistory(messages,job.history,job.mode,job.workflow);render();startProgress(job.createdAt);state(true);remoteJob=id;
       await pollJob(id,data=>{for(const e of data.events)onEvent(e,job.mode,job.workflow);});
     }else{remoteJob=id;await pollJob(id);await loadRooms();$('dashboard-status').textContent='이전 작업 결과를 확인했습니다.';}
