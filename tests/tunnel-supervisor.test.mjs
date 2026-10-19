@@ -12,29 +12,38 @@ function fixture(fetchImpl){
 const healthy=(instanceId='worker-1')=>new Response(JSON.stringify({healthy:true,instanceId}));
 test('healthy tunnel probes authenticated full route without login challenges or redundant registration',async()=>{
   const calls=[];const f=fixture(async(url,options)=>{calls.push({url,options});return url.endsWith('/register')?new Response('{}'):healthy();});f.address();await pause();f.advance(30000);await f.supervisor.tick();
-  assert.equal(calls.filter(c=>c.url.endsWith('/register')).length,1);assert.equal(calls.filter(c=>c.url.endsWith('/health')).length,2);assert.equal(f.saves.length,1);assert.equal(f.children[0].signals.length,0);
+  assert.equal(calls.filter(c=>c.url.endsWith('/register')).length,1);assert.equal(calls.filter(c=>c.url.endsWith('/health')).length,4);assert.equal(f.saves.length,1);assert.equal(f.children[0].signals.length,0);
   for(const call of calls){assert.equal(call.options.headers.Authorization,'Bearer bridge-secret');assert.equal(call.options.redirect,'error');assert.ok(!call.url.includes('auth/config'));}f.supervisor.stop();
 });
 test('running but unreachable tunnel restarts after three failures; a new address registers automatically',async()=>{
-  let broken=true;const f=fixture(async url=>{if(url.endsWith('/register'))return new Response('{}');if(broken)throw new Error('DNS failed');return healthy();});f.address();await pause();f.advance(30000);
+  let broken=false;const f=fixture(async url=>{if(url.endsWith('/register'))return new Response('{}');if(broken)throw new Error('DNS failed');return healthy();});f.address();await pause();broken=true;f.advance(30000);
   for(let i=0;i<2;i++)await f.supervisor.tick();assert.deepEqual(f.children[0].signals,[]);await f.supervisor.tick();assert.deepEqual(f.children[0].signals,['SIGTERM']);
-  f.children[0].emit('exit',0);const retry=f.timers.find(t=>t.ms===5000&&!t.cancelled);retry.callback();f.address(1,'replacement-tunnel');await pause();assert.equal(f.children.length,2);assert.ok(f.saves.at(-1).url.includes('replacement-tunnel'));
+  f.children[0].emit('exit',0);const retry=f.timers.find(t=>t.ms===5000&&!t.cancelled);retry.callback();broken=false;f.address(1,'replacement-tunnel');await pause();assert.equal(f.children.length,2);assert.ok(f.saves.at(-1).url.includes('replacement-tunnel'));
   broken=false;f.advance(30000);await f.supervisor.tick();assert.deepEqual(f.children[1].signals,[]);f.supervisor.stop();
 });
 test('one intermittent failure resets after recovery and cannot trigger an unnecessary restart',async()=>{
-  let fail=true;const f=fixture(async url=>{if(url.endsWith('/register'))return new Response('{}');if(fail)throw new Error();return healthy();});f.address();await pause();f.advance(30000);await f.supervisor.tick();fail=false;await f.supervisor.tick();fail=true;await f.supervisor.tick();await f.supervisor.tick();assert.deepEqual(f.children[0].signals,[]);f.supervisor.stop();
+  let fail=false;const f=fixture(async url=>{if(url.endsWith('/register'))return new Response('{}');if(fail)throw new Error();return healthy();});f.address();await pause();fail=true;f.advance(30000);await f.supervisor.tick();fail=false;await f.supervisor.tick();fail=true;await f.supervisor.tick();await f.supervisor.tick();assert.deepEqual(f.children[0].signals,[]);f.supervisor.stop();
 });
 test('stale Vercel routing is re-registered while the healthy tunnel and worker stay running',async()=>{
-  let registrations=0;const f=fixture(async url=>{if(url.endsWith('/register')){registrations++;return new Response('{}');}return healthy(url.startsWith(origin)?'stale-worker':'current-worker');});f.address();await pause();f.advance(30000);await f.supervisor.tick();assert.equal(registrations,2);assert.deepEqual(f.children[0].signals,[]);f.supervisor.stop();
+  let registrations=0;const f=fixture(async url=>{if(url.endsWith('/register')){registrations++;return new Response('{}');}return healthy(url.startsWith(origin)?'stale-worker':'current-worker');});f.address();await pause();assert.equal(registrations,2);f.advance(30000);await f.supervisor.tick();assert.equal(registrations,3);assert.deepEqual(f.children[0].signals,[]);f.supervisor.stop();
 });
 test('late registration for a previous tunnel cannot mark the new one registered or overwrite local state',async()=>{
   let release;const oldResponse=new Promise(resolve=>{release=resolve;});let registrations=0;
   const f=fixture(async url=>{if(url.endsWith('/register')){registrations++;return registrations===1?oldResponse:new Response('{}');}return healthy();});
-  f.address(0,'old-tunnel');f.children[0].emit('exit',1);f.timers.find(t=>t.ms===5000).callback();f.address(1,'new-tunnel');await pause();release(new Response('{}'));await pause();assert.equal(f.saves.length,1);assert.ok(f.saves[0].url.includes('new-tunnel'));f.supervisor.stop();
+  f.address(0,'old-tunnel');await pause();f.children[0].emit('exit',1);f.timers.find(t=>t.ms===5000).callback();f.address(1,'new-tunnel');await pause();release(new Response('{}'));await pause();await f.supervisor.tick(true);assert.equal(f.saves.length,1);assert.ok(f.saves[0].url.includes('new-tunnel'));f.supervisor.stop();
 });
 test('startup stalls and SIGTERM stalls are bounded, and stopping cancels restarts',async()=>{
   const f=fixture(async()=>new Response('{}'));f.advance(90000);await f.supervisor.tick();assert.deepEqual(f.children[0].signals,['SIGTERM']);const kill=f.timers.find(t=>t.ms===10000);kill.callback();assert.deepEqual(f.children[0].signals,['SIGTERM','SIGKILL']);f.children[0].emit('exit',1);const retry=f.timers.find(t=>t.ms===5000);f.supervisor.stop();assert.equal(retry.cancelled,true);retry.callback();assert.equal(f.children.length,1);
 });
 test('overlapping ticks do not double-count an in-flight failure',async()=>{
-  let release;const waiting=new Promise(resolve=>{release=resolve;});const f=fixture(async url=>url.endsWith('/register')?new Response('{}'):waiting);f.address();await pause();f.advance(30000);const first=f.supervisor.tick();await f.supervisor.tick();await f.supervisor.tick();release(new Response('{}',{status:503}));await first;assert.equal(f.logs.filter(x=>x.includes('응답 실패')).length,1);assert.deepEqual(f.children[0].signals,[]);f.supervisor.stop();
+  let release,broken=false;const waiting=new Promise(resolve=>{release=resolve;});const f=fixture(async url=>url.endsWith('/register')?new Response('{}'):broken?waiting:healthy());f.address();await pause();broken=true;f.advance(30000);const first=f.supervisor.tick();await f.supervisor.tick();await f.supervisor.tick();release(new Response('{}',{status:503}));await first;assert.equal(f.logs.filter(x=>x.includes('응답 실패')).length,1);assert.deepEqual(f.children[0].signals,[]);f.supervisor.stop();
+});
+test('unresolved tunnel addresses are never published; DNS readiness is bounded and recovery is verified',async()=>{
+  let dnsBroken=true,registrations=0;const f=fixture(async url=>{if(url.endsWith('/register')){registrations++;return new Response('{}');}if(dnsBroken)throw Object.assign(new Error('fetch failed'),{cause:{code:'ENOTFOUND'}});return healthy();});
+  f.address();await pause();assert.equal(registrations,0);assert.equal(f.saves.length,0);assert.ok(f.logs.some(l=>l.includes('DNS')));
+  f.advance(90000);await f.supervisor.tick();assert.deepEqual(f.children[0].signals,[]);assert.equal(registrations,0);
+  dnsBroken=false;await f.supervisor.tick();assert.equal(registrations,1);assert.equal(f.saves.length,1);f.supervisor.stop();
+});
+test('a new tunnel that never becomes reachable is eventually replaced without publishing it',async()=>{
+  const f=fixture(async()=>{throw new Error('unreachable');});f.address();await pause();f.advance(180000);for(let i=0;i<3;i++)await f.supervisor.tick();assert.deepEqual(f.children[0].signals,['SIGTERM']);assert.equal(f.saves.length,0);f.supervisor.stop();
 });

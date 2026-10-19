@@ -257,7 +257,7 @@ async function openRoom(id,{autoResume=true,allowRunning=false}={}){
   render();await refresh(false);await Promise.all([refreshResults(),loadFiles()]);
   if(!localServer&&autoResume){try{const auth=await remoteJson('/api/auth/status?roomId='+encodeURIComponent(id));const jobId=auth.activeJob?.type==='meeting'&&auth.activeJob.roomId===id?auth.activeJob.id:auth.latestMeeting?.id;if(jobId){localStorage.setItem('ideas-pending-job',jobId);void resumeMeetingJob(jobId,false);}}catch(error){$('status').textContent=error.message;}}
 }
-let googlePreparing=false,googlePrepared=false,googleScriptPromise;
+let googlePreparing=false,googlePrepared=false,googleScriptPromise,googlePopupTimer;
 function loadGoogleScript(){
   if(window.google?.accounts?.id)return Promise.resolve();
   if(googleScriptPromise)return googleScriptPromise;
@@ -269,22 +269,28 @@ function loadGoogleScript(){
 }
 async function prepareGoogleLogin(force=false){
   if(localServer||googlePreparing||googlePrepared&&!force)return;
+  clearTimeout(googlePopupTimer);
   googlePreparing=true;googlePrepared=false;$('google-retry').hidden=true;$('google-login').hidden=false;$('google-button').replaceChildren();$('google-status').textContent='맥 워커 연결과 Google 로그인 설정을 확인하고 있습니다.';
   try{
-    const response=await fetch('/api/auth/config');const auth=await response.json();if(!response.ok)throw new Error(auth.error||'로그인 설정을 읽지 못했습니다.');
+    const response=await fetch('/api/auth/config',{signal:AbortSignal.timeout(12000)});const auth=await response.json();if(!response.ok)throw new Error(auth.error||'로그인 설정을 읽지 못했습니다.');
     if(!auth.google?.enabled){$('google-login').hidden=true;$('google-status').textContent='Google 로그인 연결 준비 중입니다. 현재는 회의실 비밀번호로 로그인하세요.';return;}
     $('google-login').hidden=false;$('google-status').textContent='Google 로그인 버튼을 준비하고 있습니다.';
-    await loadGoogleScript();window.google.accounts.id.initialize({client_id:auth.google.clientId,nonce:auth.google.nonce,auto_select:false,callback:async result=>{
+    await loadGoogleScript();window.google.accounts.id.initialize({client_id:auth.google.clientId,nonce:auth.google.nonce,auto_select:false,ux_mode:'popup',use_fedcm_for_button:false,callback:async result=>{
+      clearTimeout(googlePopupTimer);
       $('google-status').textContent='Google 계정을 확인하고 있습니다.';
       try{await remoteJson('/api/auth/google',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential:result.credential})});googlePrepared=false;await initializeRooms();}
       catch(error){googlePrepared=false;$('google-status').textContent=error.message;$('google-retry').hidden=false;}
     }});
-    $('google-button').replaceChildren();window.google.accounts.id.renderButton($('google-button'),{type:'standard',theme:'outline',size:'large',text:'signin_with',locale:'ko',width:280});
-    $('password-fallback').open=false;googlePrepared=true;$('google-status').textContent='내 Google 계정을 선택하세요. 로그인 요청은 10분 동안 유효합니다.';
-  }catch(error){$('google-status').textContent=error.message;$('google-retry').textContent='회의실 연결 다시 확인';$('google-retry').hidden=false;}
+    $('google-button').replaceChildren();window.google.accounts.id.renderButton($('google-button'),{type:'standard',theme:'outline',size:'large',text:'signin_with',locale:'ko',width:280,click_listener:()=>{
+      clearTimeout(googlePopupTimer);$('google-status').textContent='Google 로그인 창에서 계정을 선택하세요.';
+      googlePopupTimer=setTimeout(()=>{if(!$('login-view').hidden)$('google-status').textContent='Google 창이 열리지 않았다면 이 사이트의 팝업 허용 상태를 확인하거나 로그인 버튼을 다시 준비해 주세요.';},10000);
+    }});
+    $('password-fallback').open=false;googlePrepared=true;$('google-status').textContent='내 Google 계정을 선택하세요. 로그인 요청은 10분 동안 유효합니다.';$('google-retry').textContent='로그인 버튼 다시 준비';$('google-retry').hidden=false;
+  }catch(error){$('google-status').textContent=['TimeoutError','AbortError'].includes(error.name)?'맥 회의실 연결이 지연되어 Google 로그인 버튼을 준비하지 못했습니다. 연결 다시 확인을 눌러 주세요.':error.message;$('google-retry').textContent='회의실 연결 다시 확인';$('google-retry').hidden=false;}
   finally{googlePreparing=false;}
 }
 $('google-retry').onclick=()=>prepareGoogleLogin(true);
+window.addEventListener('online',()=>{if(!$('login-view').hidden&&!googlePrepared)void prepareGoogleLogin(true);});
 function showLogin(){void prepareGoogleLogin();$('login-view').hidden=false;$('dashboard').hidden=true;$('room-view').hidden=true;$('logout').hidden=true;$('resume-job').hidden=true;$('worker-state').textContent='회의실 로그인 필요';}
 async function initializeRooms(){
   if(!localServer){const auth=await remoteJson('/api/auth/status');$('logout').hidden=false;if(auth.activeJob)localStorage.setItem('ideas-pending-job',auth.activeJob.id);}

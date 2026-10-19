@@ -1,7 +1,7 @@
 import {workerAddress} from '../remote-proxy.mjs';
 
 // Keep the worker and its jobs alive when only the public tunnel has stopped working.
-export function createTunnelSupervisor({origin,bridgeToken,spawnTunnel,saveConnection=async()=>{},log=()=>{},fetchImpl=fetch,now=Date.now,setTimer=setTimeout,clearTimer=clearTimeout,startupGraceMs=20000,startupTimeoutMs=90000,failureLimit=3}={}){
+export function createTunnelSupervisor({origin,bridgeToken,spawnTunnel,saveConnection=async()=>{},log=()=>{},fetchImpl=fetch,now=Date.now,setTimer=setTimeout,clearTimer=clearTimeout,startupGraceMs=20000,startupTimeoutMs=90000,addressReadyTimeoutMs=180000,failureLimit=3}={}){
   let current=null,stopped=false,retryTimer,busy=false;
   const active=session=>!stopped&&current===session&&!session.restarting;
   const request=(url,options={})=>fetchImpl(url,{...options,redirect:'error',signal:AbortSignal.timeout(10000),headers:{Authorization:'Bearer '+bridgeToken,...options.headers}});
@@ -14,7 +14,7 @@ export function createTunnelSupervisor({origin,bridgeToken,spawnTunnel,saveConne
       if(!active(session)||session.url!==address)return;
       await saveConnection({url:address,origin,registeredAt:new Date(now()).toISOString()});
       if(!active(session))return;
-      session.registered=true;log('Vercel에 맥 워커 연결 완료');
+      session.registered=true;log('외부 응답을 확인한 맥 워커 주소 등록 완료');
     }catch{if(active(session)){session.registered=false;log('Vercel 연결 등록 대기 중 · 다음 점검에서 재시도');}}
     finally{session.registering=false;}
   }
@@ -34,7 +34,7 @@ export function createTunnelSupervisor({origin,bridgeToken,spawnTunnel,saveConne
     let buffer='';child.stderr.on('data',chunk=>{
       if(!active(session))return;
       buffer+=chunk.toString();const match=/https:\/\/[a-z0-9-]+\.trycloudflare\.com(?=[\s|]|$)/.exec(buffer);
-      if(match&&!session.url){session.url=workerAddress(match[0]);session.addressAt=now();log('인증된 맥 중계 연결 시작 · 등록 중');void register(session);}
+      if(match&&!session.url){session.url=workerAddress(match[0]);session.addressAt=now();log('맥 중계 주소 발급 · 외부 응답 확인 중');void tick(true);}
       buffer=buffer.slice(-8000);
     });
     const ended=()=>{if(current!==session)return;clearTimer(session.killTimer);current=null;if(!stopped){log('맥 중계 연결 종료 · 5초 후 다시 연결');schedule();}};
@@ -44,23 +44,29 @@ export function createTunnelSupervisor({origin,bridgeToken,spawnTunnel,saveConne
     const response=await request(base+'/api/worker/health');if(!response.ok)throw new Error();
     const data=await response.json();if(data.healthy!==true||typeof data.instanceId!=='string'||!data.instanceId)throw new Error();return data.instanceId;
   }
-  async function tick(){
+  async function tick(initial=false){
     if(stopped||busy||!current)return;
     const session=current;
     if(!active(session))return;
     if(!session.url){if(now()-session.startedAt>=startupTimeoutMs)restart(session,'중계 주소 발급 시간 초과');return;}
-    if(now()-session.addressAt<startupGraceMs)return;
+    if(!initial&&now()-session.addressAt<startupGraceMs)return;
     busy=true;
     try{
       let direct;
       try{direct=await health(session.url);}
-      catch{
+      catch(error){
         if(!active(session))return;
+        if(!session.verified&&now()-session.addressAt<addressReadyTimeoutMs){
+          const dnsFailure=['ENOTFOUND','EAI_AGAIN'].includes(error.cause?.code||error.code);
+          log(dnsFailure?'중계 주소 DNS 응답 대기 · 로그인 연결 준비 중':'새 중계의 외부 응답 대기 · 아직 연결 완료가 아닙니다.');return;
+        }
         session.failures++;log(`외부 중계 응답 실패 ${session.failures}/${failureLimit}`);
         if(session.failures>=failureLimit)restart(session,'외부 중계 연결 끊김 감지');return;
       }
       if(!active(session))return;
-      session.failures=0;
+      session.verified=true;session.failures=0;
+      if(!session.registered)await register(session);
+      if(!active(session))return;
       try{const routed=await health(origin);if(routed!==direct)throw new Error();session.registered=true;}
       catch{if(active(session)){session.registered=false;await register(session,true);}}
     }finally{busy=false;}
