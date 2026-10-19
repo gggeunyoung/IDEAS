@@ -65,7 +65,8 @@ function messageCard(m){
   const copy=document.createElement('button');copy.className='copy-answer';copy.textContent='복사';copy.setAttribute('aria-label',m.speaker+' 발언 복사');copy.onclick=async()=>{try{await navigator.clipboard.writeText(m.text);copy.textContent='복사됨';}catch{copy.textContent='복사 실패';}setTimeout(()=>copy.textContent='복사',2000);};meta.append(copy);card.append(meta);
   const cut=m.phase==='team'?['\n\n이번 차례의 새 근거·판단:','\n\n변경 파일:','\n\n파일 변경 없음'].map(mark=>m.text.indexOf(mark)).filter(index=>index>=0).sort((a,b)=>a-b)[0]:undefined;
   const body=document.createElement('div');body.className='body';renderText(body,cut==null?m.text:m.text.slice(0,cut));card.append(body);
-  if(cut!=null||m.model||m.webSearchEnabled){const details=document.createElement('details');details.className='message-details';const title=document.createElement('summary');title.textContent='작업·검토 상세'+(m.model?' · 모델과 사용량':'');details.append(title);
+  if(cut!=null||m.workNotes||m.model||m.webSearchEnabled){const details=document.createElement('details');details.className='message-details';const title=document.createElement('summary');title.textContent='작업·검토 상세'+(m.model?' · 모델과 사용량':'');details.append(title);
+    if(m.workNotes){const notes=document.createElement('div');notes.className='body';renderText(notes,m.workNotes);details.append(notes);}
     if(cut!=null){const extra=document.createElement('div');extra.className='body';renderText(extra,m.text.slice(cut));details.append(extra);}
     if(m.model){const usage=document.createElement('p');usage.className='usage';usage.textContent=m.model+(Number.isFinite(m.inputTokens)?` · 입력 ${m.inputTokens} / 출력 ${m.outputTokens??'미확인'} 토큰`:'')+(m.mode==='subscription'?' · 구독 사용량 적용':m.costUSD!=null?` · 추정 $${m.costUSD.toFixed(5)}`:'')+(m.truncated?' · 생성 한도 도달':'');details.append(usage);}
     if(m.webSearchEnabled){const research=document.createElement('p');research.className='usage';research.textContent=`검색 ${m.webSearchCount||0}회 · 페이지 확인 ${m.webFetchCount||0}회`;details.append(research);}card.append(details);
@@ -137,15 +138,17 @@ function showParticipants(preserve=false){
   updateWriter();searchState();render();
 }
 async function refresh(preserve=true){
+  const roomId=currentRoom;
   $('refresh').disabled=true;
-  try{const response=await api('/api/config');if(!response.ok)throw new Error('연결 상태를 읽지 못했습니다.');config=await response.json();showParticipants(preserve);$('project-name').textContent=`자료 폴더: ${config.projectName}`;
+  try{const response=await api('/api/config');if(!response.ok)throw new Error('연결 상태를 읽지 못했습니다.');const data=await response.json();if(currentRoom!==roomId)return;config=data;showParticipants(preserve);$('project-name').textContent=`자료 폴더: ${config.projectName}`;
     $('status').textContent=$('mode').value==='subscription'?`구독 연결 준비 ${config.local.filter(p=>p.ready).length}/3 · 로그인한 참가자를 선택해 시작하세요.`:'연결 상태를 갱신했습니다.';
   }catch(error){$('status').textContent=error.message;}finally{$('refresh').disabled=running;}
 }
 
 async function refreshResults(){
+  const roomId=currentRoom;
   try{
-    const response=await api('/api/deliverables');const data=await response.json();if(!response.ok)throw new Error(data.error);
+    const response=await api('/api/deliverables');const data=await response.json();if(currentRoom!==roomId)return;if(!response.ok)throw new Error(data.error);
     $('deliverables').replaceChildren();
     if(!data.items.length){$('deliverables').textContent='아직 저장된 파일이 없습니다.';return;}
     for(const item of data.items){
@@ -242,7 +245,8 @@ $('clear').onclick=async()=>{if(messages.length&&!confirm('현재 대화를 새�
 $('export').onclick=()=>{const markdown='# IDEAS 공동 회의록\n\n'+messages.map(m=>`## ${m.speaker} · ${m.mode==='demo'?'데모':m.speaker==='사용자'?'사용자':stage(m)}${m.error?' · 오류':''}\n\n${m.text}\n${m.model?'\n모델: '+m.model:''}`).join('\n\n');const url=URL.createObjectURL(new Blob([markdown],{type:'text/markdown;charset=utf-8'}));const link=document.createElement('a');link.href=url;link.download='ideas-meeting.md';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
 const localServer=['127.0.0.1','localhost','::1','[::1]'].includes(location.hostname)&&!document.querySelector('meta[name="ideas-hosting"][content="static"]');
 async function loadFiles(){
-  $('files').replaceChildren();try{const response=await api('/api/files');const data=await response.json();if(!response.ok)throw new Error(data.error);for(const name of data.files){const label=document.createElement('label');label.className='file';const input=document.createElement('input');input.type='checkbox';input.name='file';input.value=name;const text=document.createElement('span');text.textContent=name;label.append(input,text);$('files').append(label);}}catch(error){$('files').textContent=error.message;}
+  const roomId=currentRoom;
+  $('files').replaceChildren();try{const response=await api('/api/files');const data=await response.json();if(currentRoom!==roomId)return;if(!response.ok)throw new Error(data.error);for(const name of data.files){const label=document.createElement('label');label.className='file';const input=document.createElement('input');input.type='checkbox';input.name='file';input.value=name;const text=document.createElement('span');text.textContent=name;label.append(input,text);$('files').append(label);}}catch(error){$('files').textContent=error.message;}
 }
 async function loadRooms(){
   const response=await fetch('/api/rooms');if(response.status===401&&!localServer){showLogin();throw new Error('세션이 만료됐습니다. 다시 로그인하세요.');}if(!response.ok)throw new Error('회의실 목록을 읽지 못했습니다.');rooms=(await response.json()).items;$('room-grid').replaceChildren();
@@ -251,10 +255,12 @@ async function loadRooms(){
 }
 async function openRoom(id,{autoResume=true,allowRunning=false}={}){
   if(running&&!allowRunning)return;executionProgress=null;renderProgress();currentRoom=id;config=null;$('dashboard').hidden=true;$('room-view').hidden=false;$('artifact').hidden=true;$('message').value='';location.hash='room='+id;
+  messages=[];render();$('participants').replaceChildren();$('files').replaceChildren();$('deliverables').replaceChildren();$('status').textContent='이 회의실의 대화와 자료를 읽고 있습니다.';
   const room=rooms.find(r=>r.id===id);if(room.kind==='project'&&preferences.workflowVersion!==2){$('workflow').value='team';$('team-focus').value='research';$('web-search').checked=true;}else if(room.kind!=='project'&&$('workflow').value==='team')$('workflow').value='discuss';$('room-title').textContent=room.name;$('active-room-name').textContent=room.name;$('active-room-path').textContent=room.root;$('git-state').textContent=room.git.branch?`${room.git.branch} · 변경 ${room.git.changes}개`:'Git 상태 확인 필요';
-  try{const response=await api('/api/session');if(!response.ok)throw new Error();messages=(await response.json()).messages;if(!messages.length){const key=id==='platform'?'ideas-room':'ideas-room:'+id;try{messages=JSON.parse(localStorage.getItem(key)||'[]');}catch{messages=[];}}}catch{messages=[];$('status').textContent='저장된 대화를 읽지 못했습니다.';}
+  try{const response=await api('/api/session');if(!response.ok)throw new Error();const data=await response.json();if(currentRoom!==id)return;messages=data.messages;if(!messages.length){const key=id==='platform'?'ideas-room':'ideas-room:'+id;try{messages=JSON.parse(localStorage.getItem(key)||'[]');}catch{messages=[];}}}catch{if(currentRoom!==id)return;messages=[];$('status').textContent='저장된 대화를 읽지 못했습니다.';}
   try{artifactLink(JSON.parse(localStorage.getItem('ideas-artifact:'+id)||(id==='platform'?localStorage.getItem('ideas-artifact'):'null')||'null'));}catch{}
   render();await refresh(false);await Promise.all([refreshResults(),loadFiles()]);
+  if(currentRoom!==id)return;
   if(!localServer&&autoResume){try{const auth=await remoteJson('/api/auth/status?roomId='+encodeURIComponent(id));const jobId=auth.activeJob?.type==='meeting'&&auth.activeJob.roomId===id?auth.activeJob.id:auth.latestMeeting?.id;if(jobId){localStorage.setItem('ideas-pending-job',jobId);void resumeMeetingJob(jobId,false);}}catch(error){$('status').textContent=error.message;}}
 }
 let googlePreparing=false,googlePrepared=false,googleScriptPromise,googlePopupTimer;

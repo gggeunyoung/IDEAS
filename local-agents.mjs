@@ -78,10 +78,12 @@ export function parseLocalAnswer(id,raw) {
       try{for(const line of raw.trim().split('\n'))if(line.trim())events.push(JSON.parse(line));}catch{throw new Error('CLI 응답 형식을 읽지 못했습니다. CLI 버전을 확인하세요.');}
       const seen=new Set();
       for(const e of events){if(e.type==='assistant')for(const c of e.message?.content||[]){if(c.type!=='tool_use'||seen.has(c.id))continue;seen.add(c.id);if(c.name==='WebSearch')webSearchCount++;if(c.name==='WebFetch')webFetchCount++;}}
+      model=events.find(e=>e.type==='system'&&typeof e.model==='string')?.model||events.find(e=>typeof e.message?.model==='string')?.message.model;
       data=events.findLast(e=>e.type==='result');
       if(!data)throw new Error('CLI가 최종 답변을 반환하지 않았습니다. 검색 또는 생성 한도에 도달했을 수 있습니다.');
     }
     if(data.is_error||data.error)throw new Error('CLI가 오류를 반환했습니다. 로그인과 사용량 한도를 확인하세요.');
+    if(id==='claude')model=data.model||model||Object.keys(data.modelUsage||{}).join(', ')||undefined;
     text=id==='claude'?(data.structured_output?JSON.stringify(data.structured_output):data.result):data.response;
     const usage=data.usage||{};
     inputTokens=usage.input_tokens;outputTokens=usage.output_tokens;
@@ -180,6 +182,7 @@ export function parseTeamTurn(id,raw){
     let completed=false;
     for(const line of raw.trim().split('\n')){
       let e;try{e=JSON.parse(line);}catch{continue;}
+      if(typeof e.model==='string')model=e.model;
       if(e.type==='thread.started')session=e.thread_id;
       if(e.type==='item.completed'&&e.item?.type==='agent_message')text=e.item.text||text;
       if(e.type==='item.completed'&&e.item?.type==='command_execution')actions.commands++;
@@ -191,8 +194,8 @@ export function parseTeamTurn(id,raw){
     // Reconnect warnings are reported as error events even when the turn later completes.
     if(!completed)failed=true;
   }else{
-    let data;try{data=JSON.parse(raw);}catch{try{data=raw.trim().split('\n').map(line=>JSON.parse(line)).findLast(e=>e.type==='result');}catch{}if(!data)throw new Error('Claude CLI 응답 형식을 읽지 못했습니다. CLI 버전을 확인하세요.');}
-    session=data.session_id;model=data.model;
+    let data;try{data=JSON.parse(raw);}catch{try{const events=raw.trim().split('\n').map(line=>JSON.parse(line));model=events.find(e=>e.type==='system'&&typeof e.model==='string')?.model||events.find(e=>typeof e.message?.model==='string')?.message.model;data=events.findLast(e=>e.type==='result');}catch{}if(!data)throw new Error('Claude CLI 응답 형식을 읽지 못했습니다. CLI 버전을 확인하세요.');}
+    session=data.session_id;model=data.model||model||Object.keys(data.modelUsage||{}).join(', ')||undefined;
     const u=data.usage||{};usage.inputTokens=(u.input_tokens||0)+(u.cache_read_input_tokens||0)+(u.cache_creation_input_tokens||0);usage.cachedInputTokens=u.cache_read_input_tokens||0;usage.outputTokens=u.output_tokens||0;
     actions.turns=data.num_turns;
     if(data.structured_output)text=JSON.stringify(data.structured_output);
@@ -202,7 +205,7 @@ export function parseTeamTurn(id,raw){
   if(failed)throw new Error(network?'네트워크 연결에 실패해 이번 차례를 진행하지 못했습니다. 인터넷 연결을 확인하세요.':'CLI가 차례를 완료하지 못했습니다. 로그인·구독 한도·CLI 설정을 확인하세요.');
   let report;try{report=JSON.parse(text);}catch{report={message:text||'요약 없이 차례를 마쳤습니다.',status:'continue',next:'',question:''};}
   if(!['continue','done','need_user'].includes(report.status))report.status='continue';
-  for(const key of ['message','next','question'])report[key]=typeof report[key]==='string'?report[key].slice(0,4000):'';
+  for(const key of ['message','workNotes','next','question'])report[key]=typeof report[key]==='string'?report[key].slice(0,key==='message'?12000:4000):'';
   return {session,report,usage,actions,model};
 }
 export async function callTeamAgent(id,prompt,{cwd,session,env=process.env,signal,runner=runProcess,outputSchema,webSearch=false,timeoutMs=900000,platform=process.platform,onActivity}={}){

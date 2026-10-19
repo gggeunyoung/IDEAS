@@ -175,3 +175,19 @@ test('리서치 결과를 웹의 저장된 파일 결과에서 읽을 수 있도
   await runTeamWorkflow(request('공유 가능한 리서치',{teamFocus:'research',budget:{minutes:10,maxTurns:8}}),e=>events.push(e),{syncBranch:noPush,projectRoot:root,deliverableDir:output,invokeTeam:async(id,p,o)=>{turns++;if(turns===1)await researchFiles(o.cwd);return researchTurn('확인 '+turns,'done');}});
   const saved=events.find(e=>e.type==='deliverable');assert.ok(saved);assert.equal(saved.files.length,3);const {readDeliverable}=await import('../deliverables.mjs');assert.match(await readDeliverable(output,saved.id,'final','research/proposal.md'),/기획 초안/);assert.equal(events.at(-1).type,'done');
 }));
+
+test('team replies keep substantive content separate from execution notes through events and exported minutes',async()=>fixture(async dir=>{
+  const root=await project(dir);const message='외국인 인증 실패 복구는 실패 이유와 다음 행동을 같은 화면에서 안내하는 제안입니다.';
+  const notes='README를 확인했고 git diff --check를 실행했습니다.';
+  const answer=()=>{const r=turn(message,'done');r.report.workNotes=notes;return r;};
+  const result=await run(root,request('사용자가 이해할 수 있게 제안을 설명해줘'),[async()=>answer(),async()=>answer()]);
+  const event=result.events.find(e=>e.type==='answer');assert.ok(event.text.startsWith(message));assert.equal(event.workNotes,notes);assert.ok(!event.text.includes(notes));
+  const {saveArtifact,readArtifact}=await import('../project-context.mjs');const output=path.join(dir,'minutes');const artifact=await saveArtifact(output,request('제안 설명'),result.events);const text=await readArtifact(output,artifact.id);assert.ok(text.includes(message));assert.ok(text.includes('작업 기록:\n'+notes));
+}));
+
+test('team parser preserves a complete explanatory reply and reports the actual Claude stream model',()=>{
+  const message='설명'.repeat(2700),report={message,workNotes:'실제 검사 기록',status:'continue',next:'',question:''};
+  const raw=[{type:'system',subtype:'init',model:'claude-test-model'},{type:'result',session_id:'test',structured_output:report,usage:{}}].map(JSON.stringify).join('\n');
+  const result=parseTeamTurn('claude',raw);assert.equal(result.report.message,message);assert.equal(result.report.workNotes,'실제 검사 기록');assert.equal(result.model,'claude-test-model');
+  const legacy=parseTeamTurn('claude',JSON.stringify({type:'result',result:'기존 응답',modelUsage:{'claude-result-model':{}}}));assert.equal(legacy.report.workNotes,'');assert.equal(legacy.model,'claude-result-model');
+});
