@@ -33,6 +33,7 @@ export function createRemoteProxy({env=process.env,fetchImpl=fetch,connectionSto
       let body;if(req.method==='POST')body=await bodyOf(req);
       const headers={Authorization:'Bearer '+env.IDEAS_BRIDGE_TOKEN,'Content-Type':'application/json',Cookie:req.headers.cookie||''};
       const response=await fetchImpl(target,{method:req.method,headers,body,redirect:'error',signal:AbortSignal.timeout(25000)});
+      if(response.status>=500&&!response.headers.get('content-type')?.includes('application/json'))return send(503,{error:'맥 중계 연결을 복구하고 있습니다. 잠시 후 회의실 연결 다시 확인을 눌러 주세요.'});
       const safeHeaders={'Content-Type':response.headers.get('content-type')||'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};for(const name of ['set-cookie','content-disposition'])if(response.headers.has(name))safeHeaders[name]=response.headers.get(name);
       res.writeHead(response.status,safeHeaders);res.end(Buffer.from(await response.arrayBuffer()));
     }catch{return send(503,{error:'맥 워커에 연결할 수 없습니다. 맥의 실행·인터넷·잠자기 상태를 확인하세요.'});}

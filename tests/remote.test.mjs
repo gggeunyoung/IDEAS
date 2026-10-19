@@ -146,3 +146,8 @@ test('authenticated GitHub account route added on Windows reaches the worker thr
   let calls=0;const server=http.createServer(createRemoteProxy({env:{IDEAS_BRIDGE_TOKEN:'bridge',IDEAS_WORKER_URL:'https://test.trycloudflare.com'},fetchImpl:async url=>{calls++;assert.ok(String(url).endsWith('/api/github'));return new Response('{"available":true}');}}));const url=await listen(server);t.after(()=>close(server));
   assert.equal((await fetch(url+'/api/github')).status,401);assert.equal(calls,0);assert.equal((await fetch(url+'/api/github',{headers:{Cookie:'__Host-ideas_session='+'a'.repeat(43)}})).status,200);assert.equal(calls,1);
 });
+
+test('tunnel HTML outage pages become a readable login recovery error without upstream cookies',async t=>{
+  const server=http.createServer(createRemoteProxy({env:{IDEAS_BRIDGE_TOKEN:'bridge',IDEAS_WORKER_URL:'https://test.trycloudflare.com'},fetchImpl:async()=>new Response('<html>Cloudflare 1016</html>',{status:530,headers:{'Content-Type':'text/html','Set-Cookie':'upstream=unexpected'}})}));const url=await listen(server);t.after(()=>close(server));
+  const response=await fetch(url+'/api/auth/config');assert.equal(response.status,503);assert.match(response.headers.get('content-type'),/application\/json/);assert.match((await response.json()).error,/중계 연결.*복구/);assert.equal(response.headers.get('set-cookie'),null);
+});

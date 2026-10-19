@@ -272,7 +272,7 @@ async function prepareGoogleLogin(force=false){
   clearTimeout(googlePopupTimer);
   googlePreparing=true;googlePrepared=false;$('google-retry').hidden=true;$('google-login').hidden=false;$('google-button').replaceChildren();$('google-status').textContent='맥 워커 연결과 Google 로그인 설정을 확인하고 있습니다.';
   try{
-    const response=await fetch('/api/auth/config',{signal:AbortSignal.timeout(12000)});const auth=await response.json();if(!response.ok)throw new Error(auth.error||'로그인 설정을 읽지 못했습니다.');
+    const response=await fetch('/api/auth/config',{signal:AbortSignal.timeout(12000)});let auth;try{auth=await response.json();}catch{throw new Error('회의실 중계 연결을 확인하지 못했습니다. 잠시 후 연결 다시 확인을 눌러 주세요.');}if(!response.ok)throw new Error(auth.error||'로그인 설정을 읽지 못했습니다.');
     if(!auth.google?.enabled){$('google-login').hidden=true;$('google-status').textContent='Google 로그인 연결 준비 중입니다. 현재는 회의실 비밀번호로 로그인하세요.';return;}
     $('google-login').hidden=false;$('google-status').textContent='Google 로그인 버튼을 준비하고 있습니다.';
     await loadGoogleScript();window.google.accounts.id.initialize({client_id:auth.google.clientId,nonce:auth.google.nonce,auto_select:false,ux_mode:'popup',use_fedcm_for_button:false,callback:async result=>{
