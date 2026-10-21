@@ -1,3 +1,4 @@
+import {pcCapabilities} from './pc-work.mjs';
 import http from 'node:http';
 import {readFile,lstat} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -39,7 +40,7 @@ export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,sync
     if(req.method==='GET'){
       try{
         const room=await registry.resolve(url.searchParams.get('roomId'));const dirs=await storage(room);
-        if(route==='/api/config')return send(200,{participants:publicConfig(env),local:await status({env}),projectName:room.name,room,gitSync:room.kind==='project'?await readProjectSync(room.root):{},pricingDate:'2026-10-11'});
+        if(route==='/api/config')return send(200,{participants:publicConfig(env),local:await status({env}),projectName:room.name,room,pcWork:pcCapabilities(room.root),gitSync:room.kind==='project'?await readProjectSync(room.root):{},pricingDate:'2026-10-11'});
         if(route==='/api/files')return send(200,{files:await projectFiles(room.root)});
         if(route==='/api/session')return send(200,{messages:await loadSession(room.root)});
         if(route==='/api/deliverables')return send(200,{items:await listDeliverables(dirs.deliverableDir)});

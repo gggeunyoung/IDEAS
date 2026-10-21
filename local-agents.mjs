@@ -1,3 +1,4 @@
+import {claudePcSettings} from './pc-work.mjs';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {mkdtemp,readFile,writeFile,rm,access,stat,readdir,open} from 'node:fs/promises';
@@ -74,7 +75,7 @@ export function runProcess(command,args,{cwd,env,input='',signal,timeout=90000,l
       killTimer=setTimeout(()=>{try{if(process.platform==='win32')child.kill('SIGKILL');else process.kill(-child.pid,'SIGKILL');}catch{}},1500);killTimer.unref();};
     const abort=()=>{reason=new Error('로컬 AI 호출을 중단했습니다.');kill();};
     const timer=setTimeout(()=>{reason=new Error('로컬 AI 응답 시간이 초과됐습니다.');kill();},timeout);timer.unref();
-    const cleanup=()=>{finished=true;clearTimeout(timer);clearTimeout(killTimer);signal?.removeEventListener('abort',abort);};
+    const cleanup=()=>{finished=true;clearTimeout(timer);if(!reason)clearTimeout(killTimer);signal?.removeEventListener('abort',abort);};
     child.on('error',()=>{cleanup();reject(new Error('CLI를 실행하지 못했습니다. 설치 경로를 확인하세요.'));});
     for(const [stream,key] of [[child.stdout,'stdout'],[child.stderr,'stderr']]){stream.setEncoding('utf8');stream.on('data',chunk=>{
       bytes+=Buffer.byteLength(chunk);
@@ -188,8 +189,8 @@ export async function callLocalAgent(id,prompt,{env=process.env,signal,runner=ru
   }finally{await rm(directory,{recursive:true,force:true});}
 }
 
-// Team mode: the CLI works as an agent inside one project work tree. Codex keeps its OS sandbox
-// (writes limited to the work tree, no network); Claude may edit there and run only the listed commands.
+// Project mode retains the original restrictions. PC mode adds a dedicated local
+// folder and network; Claude runs general commands only through its OS sandbox.
 const codexTeamFlags=['--no-daemon','--ask-for-approval','never',...['apps','plugins','multi_agent','browser_use','workspace_dependencies','skill_search'].flatMap(f=>['--disable',f])];
 const claudeTeamAllowed=['Read','Edit','Write','Glob','Grep','Bash(node:*)','Bash(npm test:*)','Bash(npm run:*)','Bash(git status:*)','Bash(git diff:*)','Bash(git log:*)','Bash(git show:*)'];
 // --ignore-user-config also drops the Windows sandbox mode that the Codex app set up; carry over only that value.
@@ -234,22 +235,25 @@ export function parseTeamTurn(id,raw){
   for(const key of ['message','workNotes','next','question'])report[key]=typeof report[key]==='string'?report[key].slice(0,key==='message'?12000:4000):'';
   return {session,report,usage,actions,model};
 }
-export async function callTeamAgent(id,prompt,{cwd,session,env=process.env,signal,runner=runProcess,outputSchema,webSearch=false,timeoutMs=900000,platform=process.platform,onActivity}={}){
+export async function callTeamAgent(id,prompt,{cwd,session,env=process.env,signal,runner=runProcess,outputSchema,webSearch=false,timeoutMs=900000,platform=process.platform,onActivity,pcDirectory}={}){
+  if(pcDirectory&&platform!=='darwin')throw new Error('맥 직접 작업 모드는 macOS에서만 지원합니다.');
   if(!['gpt','claude'].includes(id))throw new Error('팀 모드는 GPT·Claude 구독 에이전트만 지원합니다.');
   const p=catalog.find(p=>p.id===id),clean=subscriptionEnv(env),command=await executableFor(id,env),{model,reasoningEffort}=executionProfile(id,env);
   // Agents test with the same Node as the room server, even when a service or app PATH lacks it.
   clean.PATH=[path.dirname(process.execPath),clean.PATH].filter(Boolean).join(path.delimiter);
+  if(pcDirectory){clean.npm_config_cache=path.join(pcDirectory,'.cache','npm');clean.PIP_CACHE_DIR=path.join(pcDirectory,'.cache','pip');clean.XDG_CACHE_HOME=path.join(pcDirectory,'.cache');}
   const scratch=await mkdtemp(path.join(tmpdir(),'ideas-team-'));
   try{
     let args,claudeSession;
     if(id==='gpt'){
       const schemaPath=path.join(scratch,'output-schema.json');await writeFile(schemaPath,JSON.stringify(outputSchema),{mode:0o600});
       const windowsSandbox=platform==='win32'?await codexWindowsSandbox(env):null;
-      args=[...codexTeamFlags,'-c',`model_reasoning_effort="${reasoningEffort}"`,'-c',`web_search="${webSearch?'live':'disabled'}"`,...(windowsSandbox?['-c',`windows.sandbox="${windowsSandbox}"`]:[]),'exec','--ignore-user-config','--ignore-rules','--sandbox','workspace-write','--json','--color','never','-C',cwd,'--output-schema',schemaPath,...(model?['--model',model]:[]),...(session?['resume',session]:[]),'-'];
+      args=[...codexTeamFlags,'-c',`model_reasoning_effort="${reasoningEffort}"`,'-c',`web_search="${webSearch?'live':'disabled'}"`,...(windowsSandbox?['-c',`windows.sandbox="${windowsSandbox}"`]:[]),'exec','--ignore-user-config','--ignore-rules','--sandbox','workspace-write',...(pcDirectory?['--add-dir',pcDirectory,'-c','sandbox_workspace_write.network_access=true']:[]),'--json','--color','never','-C',cwd,'--output-schema',schemaPath,...(model?['--model',model]:[]),...(session?['resume',session]:[]),'-'];
     }else{
       claudeSession=session||randomUUID();
-      const tools=webSearch?[...claudeTeamAllowed,'WebSearch','WebFetch']:claudeTeamAllowed;
-      args=['--effort',reasoningEffort,'--print','--output-format','stream-json','--verbose','--include-partial-messages',session?'--resume':'--session-id',claudeSession,'--permission-mode','acceptEdits','--tools',`Read,Edit,Write,Glob,Grep,Bash${webSearch?',WebSearch,WebFetch':''}`,'--allowedTools',tools.join(','),'--disallowedTools','mcp__*','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--safe-mode','--disable-slash-commands','--setting-sources','','--settings','{"disableAllHooks":true,"forceLoginMethod":"claudeai"}','--max-turns','80','--json-schema',JSON.stringify(outputSchema),...(model?['--model',model]:[])];
+      const base=pcDirectory?['Read','Edit','Write','Glob','Grep']:claudeTeamAllowed;
+      const tools=webSearch?[...base,'WebSearch','WebFetch']:base;
+      args=['--effort',reasoningEffort,'--print','--output-format','stream-json','--verbose','--include-partial-messages',session?'--resume':'--session-id',claudeSession,'--permission-mode','acceptEdits','--tools',`Read,Edit,Write,Glob,Grep,Bash${webSearch?',WebSearch,WebFetch':''}`,'--allowedTools',tools.join(','),'--disallowedTools','mcp__*','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--safe-mode',...(pcDirectory?['--restricted','--add-dir',pcDirectory]:[]),'--disable-slash-commands','--setting-sources','','--settings',JSON.stringify(pcDirectory?claudePcSettings(pcDirectory):{disableAllHooks:true,forceLoginMethod:'claudeai'}),'--max-turns','80','--json-schema',JSON.stringify(outputSchema),...(model?['--model',model]:[])];
     }
     const result=await runner(command,args,{cwd,env:clean,input:`${prompt.system}\n\n${prompt.user}`,signal,timeout:timeoutMs,limit:20_000_000,onStdout:createActivityReporter(id,onActivity)});
     if(result.code!==0&&id==='claude')throw new Error(`${p.name} CLI 호출 실패. 계정 로그인·구독 한도·CLI 설정을 확인하세요. API로 대체하지 않았습니다.`);

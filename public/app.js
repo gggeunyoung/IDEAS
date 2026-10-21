@@ -14,10 +14,11 @@ try{artifactLink(JSON.parse(localStorage.getItem('ideas-artifact')||'null'));}ca
 let preferences={};
 try{preferences=JSON.parse(localStorage.getItem('ideas-settings')||'{}')||{};}catch{}
 for(const [id,key,values] of [['mode','mode',['subscription','live','demo']],['workflow','workflow',['discuss','draft','files','goal','team']]])if(values.includes(preferences[key]))$(id).value=preferences[key];
+if(['pc','project'].includes(preferences.execution))$('team-execution').value=preferences.execution;
 if(['research','build'].includes(preferences.teamFocus))$('team-focus').value=preferences.teamFocus;
 if(typeof preferences.review==='boolean')$('review').checked=preferences.review;
 if(typeof preferences.webSearch==='boolean')$('web-search').checked=preferences.webSearch;
-function savePreferences(){preferences={workflowVersion:2,teamFocus:$('team-focus').value,mode:$('mode').value,workflow:$('workflow').value,writer:$('writer').value,review:$('review').checked,webSearch:$('web-search').checked};try{localStorage.setItem('ideas-settings',JSON.stringify(preferences));}catch{}}
+function savePreferences(){preferences={workflowVersion:2,execution:$('team-execution').value,teamFocus:$('team-focus').value,mode:$('mode').value,workflow:$('workflow').value,writer:$('writer').value,review:$('review').checked,webSearch:$('web-search').checked};try{localStorage.setItem('ideas-settings',JSON.stringify(preferences));}catch{}}
 
 const goalLabels={complete:'완료',field_pending:'현장 검증 대기',blocked:'해결 장애',budget_exhausted:'실행 예산 도달',stalled:'진전 없이 반복',cancelled:'사용자 중단',failed:'실행 실패',goal_running:'목표 실행 중',need_user:'사용자 결정 필요'};
 const phases={team:'팀 작업',implement:'실제 구현',execute:'실제 작업 상태',plan:'작업 계획',draft:'파일 초안',review:'다른 AI 검토',final:'검토 반영 수정본'};
@@ -89,7 +90,7 @@ function render(){
   $('cost').textContent=$('mode').value==='subscription'?'GPT · Claude 구독 연결':`API 비용 추정 $${total.toFixed(4)}${unknown?' + 미확인 비용':''}`;
 }
 function searchState(){$('web-search').disabled=running||$('mode').value!=='subscription';$('search-hint').textContent=$('mode').value==='subscription'?'조사가 필요하면 검색합니다. 검색어는 외부 검색 서비스로 전송됩니다.':'웹 검색 연결은 현재 기존 구독 모드에서 사용할 수 있습니다.';}
-function state(active){running=active;for(const id of ['send','clear','mode','review','workflow','writer','refresh','refresh-results','home','save-project','logout','resume-job','goal-minutes','goal-calls','team-minutes','team-turns','team-new','team-focus'])$(id).disabled=active;searchState();document.querySelectorAll('[name=participant],[name=file]').forEach(e=>e.disabled=active);$('stop').hidden=!active;$('send').textContent=active?'작업 중':messages.length?'의견 보내기 →':'회의 시작 →';}
+function state(active){running=active;for(const id of ['send','clear','mode','review','workflow','writer','refresh','refresh-results','home','save-project','logout','resume-job','goal-minutes','goal-calls','team-minutes','team-turns','team-new','team-focus','team-execution'])$(id).disabled=active;searchState();document.querySelectorAll('[name=participant],[name=file]').forEach(e=>e.disabled=active);$('stop').hidden=!active;$('send').textContent=active?'작업 중':messages.length?'의견 보내기 →':'회의 시작 →';}
 let executionProgress=null;
 function renderProgress(){
   $('execution-progress').hidden=!executionProgress;if(!executionProgress)return;
@@ -119,11 +120,12 @@ function updateWriter(){
   if(selected().includes(previous))$('writer').value=previous;
   $('writer-field').hidden=!['draft','files','goal','team'].includes($('workflow').value);
   $('writer-field').firstChild.textContent=$('workflow').value==='team'?'먼저 시작할 에이전트':'초안 작성자';
+  if(config){const available=config.pcWork?.available===true;$('team-execution').querySelector('[value=pc]').disabled=!available;if(!available)$('team-execution').value='project';$('pc-work-hint').textContent=available?`프로젝트 작업 트리와 ${config.pcWork.directory}에서 실행합니다. 패키지 설치·네트워크 사용 가능. GUI 앱 제어는 연결되지 않았습니다. 추가 폴더는 Git 자동 저장 대상이 아닙니다.`:'현재 워커에서는 맥 직접 작업을 지원하지 않습니다.';}
   $('team-budget').hidden=$('workflow').value!=='team';$('review').closest('label').hidden=$('workflow').value==='team';
   for(const option of $('team-turns').options)option.disabled=$('team-focus').value==='research'&&Number(option.value)<6;
   if($('team-focus').value==='research'&&Number($('team-turns').value)<6)$('team-turns').value='16';
   $('goal-budget').hidden=$('workflow').value!=='goal';
-  if(config)$('room-summary').textContent=selected().map(id=>config.participants.find(p=>p.id===id)?.name||id).join(' · ')+($('workflow').value==='team'?' · '+($('team-focus').value==='research'?'리서치·기획':'구현·테스트'):' · 함께 대화 중');
+  if(config)$('room-summary').textContent=selected().map(id=>config.participants.find(p=>p.id===id)?.name||id).join(' · ')+($('workflow').value==='team'?' · '+($('team-focus').value==='research'?'리서치·기획':'구현·테스트')+($('team-execution').value==='pc'?' · 맥 직접 작업':' · 프로젝트 제한'):' · 함께 대화 중');
   $('limits').textContent=$('workflow').value==='team'?($('team-focus').value==='research'?'시간·차례 예산 안에서 조사·대안·반론·보완을 계속합니다. 파일 수정이 없다고 3차례 만에 끝내지 않습니다. 근거·분석·기획 파일과 두 사람의 검토가 필요합니다.':'두 에이전트가 설정한 시간·차례 안에서 교대로 구현하고 확인합니다.'):$('workflow').value==='goal'?'목표 실행은 설정한 시간·호출 예산 안에서 반복합니다. 실제 테스트와 다른 AI 검토를 거쳐 종료 상태를 남깁니다.':$('workflow').value==='files'?'구독 참가자 2명 · 최대 5회 호출 · 검토 필수. 파일은 별도 폴더에 저장하며 원본에 적용하지 않습니다.':'한 번에 최대 6회 호출. 자동 반복하지 않습니다. 원본 파일은 수정하지 않습니다.';
 }
 function showParticipants(preserve=false){
@@ -217,7 +219,7 @@ $('composer').addEventListener('submit',async event=>{
   controller=new AbortController();startProgress(new Date().toISOString());state(true);$('status').textContent=mode==='subscription'?'구독 CLI를 호출합니다. 앱 화면을 조작하지 않습니다.':mode==='live'?'별도 과금 API 호출을 시작합니다.':'무료 데모를 시작합니다.';
   let failures=0,lastNotice='';$('artifact').hidden=true;
   try{
-    const request={roomId:currentRoom,history,participants:ids,mode,review:$('review').checked,workflow,writer:$('writer').value,files,webSearch:mode==='subscription'&&$('web-search').checked,...(workflow==='goal'?{budget:{minutes:Number($('goal-minutes').value),maxCalls:Number($('goal-calls').value)}}:{}),...(workflow==='team'?{teamFocus:$('team-focus').value,budget:{minutes:Number($('team-minutes').value),maxTurns:Number($('team-turns').value)},newTeam:$('team-new').checked}:{})};
+    const request={roomId:currentRoom,history,participants:ids,mode,review:$('review').checked,workflow,writer:$('writer').value,files,webSearch:mode==='subscription'&&$('web-search').checked,...(workflow==='goal'?{budget:{minutes:Number($('goal-minutes').value),maxCalls:Number($('goal-calls').value)}}:{}),...(workflow==='team'?{execution:$('team-execution').value,teamFocus:$('team-focus').value,budget:{minutes:Number($('team-minutes').value),maxTurns:Number($('team-turns').value)},newTeam:$('team-new').checked}:{})};
     if(!localServer){
       messages.push({speaker:'사용자',text,mode,workflow});save();render();$('message').value='';$('status').textContent=workflow==='team'?`맥에서 팀 작업 시작 · 최대 ${request.budget.minutes}분 / ${request.budget.maxTurns}차례. 웹을 닫아도 맥에서 진행하며 나중에 다시 조회할 수 있습니다.`:workflow==='goal'?`맥에서 목표 실행 시작 · 최대 ${request.budget.minutes}분 / ${request.budget.maxCalls}회. 웹을 닫아도 맥에서 진행하며 나중에 다시 조회할 수 있습니다.`:'맥에서 회의를 시작합니다. 토론은 보통 1~5분, 파일 협업은 최대 10분 걸릴 수 있습니다.';
       await submitRemoteJob('meeting',request,job=>{for(const e of job.events){if(e.type==='error')failures++;if(e.type==='notice')lastNotice=e.text;onEvent(e,mode,workflow,true);}save();render();});
@@ -238,7 +240,7 @@ $('refresh-results').onclick=refreshResults;
 $('refresh').onclick=()=>refresh(false);
 $('team-focus').onchange=updateWriter;
 $('workflow').onchange=()=>{if(['files','goal'].includes($('workflow').value))$('review').checked=true;updateWriter();};
-for(const id of ['mode','workflow','writer','review','web-search','team-focus'])$(id).addEventListener('change',savePreferences);
+for(const id of ['mode','workflow','writer','review','web-search','team-focus','team-execution'])$(id).addEventListener('change',savePreferences);
 $('mode').onchange=()=>{if(config)showParticipants();$('status').textContent=$('mode').value==='subscription'?'기존 계정으로 로그인한 CLI를 사용합니다. API 키를 사용하지 않습니다.':$('mode').value==='demo'?'무료 데모 · 실제 AI 답변을 생성하지 않습니다.':'API 모드 · 대화와 선택한 자료를 전송하고 별도 과금합니다.';};
 $('example').onclick=()=>{$('message').value='나와 AI 동료들이 일주일 동안 함께 시도할 생산적인 실험 3개를 제안해줘. 하루에 30분만 쓸 수 있어.';$('message').focus();};
 $('clear').onclick=async()=>{if(messages.length&&!confirm('현재 대화를 새로 시작할까요? 이미 저장한 회의록과 결과 파일은 남습니다.'))return;try{const response=await api('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reset:true})});if(!response.ok)throw new Error((await response.json()).error);messages=[];executionProgress=null;renderProgress();save();render();$('artifact').hidden=true;localStorage.removeItem('ideas-artifact:'+currentRoom);$('status').textContent='새 대화를 시작하세요.';}catch(error){$('status').textContent=error.message;}};
@@ -358,3 +360,5 @@ $('message').addEventListener('input',()=>{$('message').style.height='auto';$('m
 $('message').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)&&!running){e.preventDefault();$('composer').requestSubmit();}});
 const workspaceResize=new ResizeObserver(entries=>{for(const entry of entries)document.documentElement.style.setProperty(entry.target.classList.contains('appbar')?'--appbar-height':'--composer-height',entry.target.getBoundingClientRect().height+'px');});workspaceResize.observe(document.querySelector('.appbar'));workspaceResize.observe(document.querySelector('footer'));
 try{await initializeRooms();}catch(error){if(!localServer){showLogin();$('login-status').textContent=error.message;}else{$('dashboard-status').textContent=error.message;$('worker-state').textContent='연결 확인 필요';}}
+
+$('team-execution').addEventListener('change',updateWriter);
