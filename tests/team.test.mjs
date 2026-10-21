@@ -191,3 +191,27 @@ test('team parser preserves a complete explanatory reply and reports the actual 
   const result=parseTeamTurn('claude',raw);assert.equal(result.report.message,message);assert.equal(result.report.workNotes,'실제 검사 기록');assert.equal(result.model,'claude-test-model');
   const legacy=parseTeamTurn('claude',JSON.stringify({type:'result',result:'기존 응답',modelUsage:{'claude-result-model':{}}}));assert.equal(legacy.report.workNotes,'');assert.equal(legacy.model,'claude-result-model');
 });
+
+test('selected uncommitted source content reaches both team agents through runMeeting',async()=>fixture(async dir=>{
+  const root=await project(dir),seen=[];const {runMeeting}=await import('../room.mjs');
+  await writeFile(path.join(root,'customer-notes.md'),'비회원 70%, 문자 인증 실패 82건.');
+  await runMeeting(request('자료에 근거해 개선안을 설명해줘',{files:['customer-notes.md']}),()=>{},{projectRoot:root,context:'자료 파일: customer-notes.md\n<자료>비회원 70%, 문자 인증 실패 82건.</자료>',syncBranch:noPush,invokeTeam:async(id,p,o)=>{seen.push(p.user);await assert.rejects(access(path.join(o.cwd,'customer-notes.md')));return turn('문자 인증 실패 복구를 우선 검토합니다','done');}});
+  assert.equal(seen.length,2);for(const prompt of seen){assert.match(prompt,/비회원 70%, 문자 인증 실패 82건/);assert.match(prompt,/읽기 전용 사본/);}
+}));
+
+test('quality profile pins model and reasoning independently of the ignored app config',async()=>{
+  const {executionProfile}=await import('../local-agents.mjs');assert.deepEqual(executionProfile('gpt',{}),{model:'gpt-6.1-sol',reasoningEffort:'high'});assert.deepEqual(executionProfile('claude',{}),{model:'claude-opus-5-5',reasoningEffort:'high'});
+  for(const id of ['gpt','claude'])await callTeamAgent(id,{system:'s',user:'u'},{cwd:'/work',env:{LOCAL_CODEX_BIN:'codex',LOCAL_CLAUDE_BIN:'claude'},outputSchema:turnSchema,runner:async(command,args)=>{assert.ok(args.includes(id==='gpt'?'model_reasoning_effort="high"':'--effort'));assert.equal(args[args.indexOf('--model')+1],id==='gpt'?'gpt-6.1-sol':'claude-opus-5-5');if(id==='claude')assert.equal(args[args.indexOf('--effort')+1],'high');return{code:0,stdout:id==='gpt'?'{"type":"item.completed","item":{"type":"agent_message","text":"{}"}}\n{"type":"turn.completed"}':'{"type":"result","result":"검증","model":"claude-opus-5-5"}'};}});
+  assert.throws(()=>executionProfile('gpt',{LOCAL_GPT_REASONING_EFFORT:'invalid'}),/사고 수준/);
+});
+
+test('Codex model receipt reads only the exact invoked session and tolerates missing receipts',async()=>fixture(async dir=>{
+  const {codexReceipt}=await import('../local-agents.mjs');const id='12345678-1234-1234-1234-123456789abc';const folder=path.join(dir,'sessions/2026/10/21');await mkdir(folder,{recursive:true});
+  await writeFile(path.join(folder,'rollout-'+id+'.jsonl'),JSON.stringify({type:'turn_context',payload:{model:'gpt-verified',effort:'high'}})+'\n');
+  await writeFile(path.join(folder,'unrelated.jsonl'),JSON.stringify({type:'turn_context',payload:{model:'wrong-model'}}));
+  assert.deepEqual(await codexReceipt(id,{CODEX_HOME:dir}),{model:'gpt-verified',reasoningEffort:'high'});assert.deepEqual(await codexReceipt('bad/path',{CODEX_HOME:dir}),{});
+}));
+
+test('team calls reject a reported lower model instead of silently presenting it as the requested model',async()=>{
+  await assert.rejects(callTeamAgent('claude',{system:'s',user:'u'},{cwd:'/work',env:{LOCAL_CLAUDE_BIN:'claude'},outputSchema:turnSchema,runner:async()=>({code:0,stdout:JSON.stringify({type:'result',model:'claude-sonnet-5-5',result:'다른 모델 응답'})})}),/요청과 다른 모델/);
+});

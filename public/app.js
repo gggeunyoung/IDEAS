@@ -68,7 +68,7 @@ function messageCard(m){
   if(cut!=null||m.workNotes||m.model||m.webSearchEnabled){const details=document.createElement('details');details.className='message-details';const title=document.createElement('summary');title.textContent='작업·검토 상세'+(m.model?' · 모델과 사용량':'');details.append(title);
     if(m.workNotes){const notes=document.createElement('div');notes.className='body';renderText(notes,m.workNotes);details.append(notes);}
     if(cut!=null){const extra=document.createElement('div');extra.className='body';renderText(extra,m.text.slice(cut));details.append(extra);}
-    if(m.model){const usage=document.createElement('p');usage.className='usage';usage.textContent=m.model+(Number.isFinite(m.inputTokens)?` · 입력 ${m.inputTokens} / 출력 ${m.outputTokens??'미확인'} 토큰`:'')+(m.mode==='subscription'?' · 구독 사용량 적용':m.costUSD!=null?` · 추정 $${m.costUSD.toFixed(5)}`:'')+(m.truncated?' · 생성 한도 도달':'');details.append(usage);}
+    if(m.model){const usage=document.createElement('p');usage.className='usage';usage.textContent=m.model+(m.reasoningEffort?' · 사고 '+m.reasoningEffort:'')+(Number.isFinite(m.inputTokens)?` · 입력 ${m.inputTokens} / 출력 ${m.outputTokens??'미확인'} 토큰`:'')+(m.mode==='subscription'?' · 구독 사용량 적용':m.costUSD!=null?` · 추정 $${m.costUSD.toFixed(5)}`:'')+(m.truncated?' · 생성 한도 도달':'');details.append(usage);}
     if(m.webSearchEnabled){const research=document.createElement('p');research.className='usage';research.textContent=`검색 ${m.webSearchCount||0}회 · 페이지 확인 ${m.webFetchCount||0}회`;details.append(research);}card.append(details);
   }
   if(Array.isArray(m.sources)&&m.sources.length){const sources=document.createElement('details');sources.className='sources message-details';const title=document.createElement('summary');title.textContent=`참고 자료 ${m.sources.length}개`;sources.append(title);for(const href of m.sources.slice(0,12)){try{const url=new URL(href);if(url.protocol!=='https:'||url.username||url.password)continue;const a=document.createElement('a');a.href=url.href;a.target='_blank';a.rel='noopener noreferrer';a.textContent=url.hostname+url.pathname;sources.append(a);}catch{}}card.append(sources);}
@@ -133,7 +133,7 @@ function showParticipants(preserve=false){
     const label=document.createElement('label');label.className='person';const input=document.createElement('input');input.type='checkbox';input.name='participant';input.value=p.id;
     input.checked=preserve?prior.includes(p.id):mode==='demo'||p.ready;input.onchange=updateWriter;label.append(input);
     const name=document.createElement('strong');name.textContent=p.name;label.append(name);
-    const sub=document.createElement('small');sub.textContent=mode==='subscription'?p.status:mode==='demo'?'실제 AI 호출 없음':`${p.model} · ${p.ready?'API 키 설정됨':'API 키 필요'}`;label.append(sub);$('participants').append(label);
+    const sub=document.createElement('small');sub.textContent=mode==='subscription'?`${p.status} · 요청 ${p.model}${p.reasoningEffort?' · 사고 '+p.reasoningEffort:''}`:mode==='demo'?'실제 AI 호출 없음':`${p.model} · ${p.ready?'API 키 설정됨':'API 키 필요'}`;label.append(sub);$('participants').append(label);
   }
   updateWriter();searchState();render();
 }

@@ -116,7 +116,7 @@ CLI는 매 호출 새 임시 폴더에서 실행합니다. Codex는 사용자 �
 
 ## 설정과 검증
 
-`.env.example`을 `.env`로 복사하여 필요한 설정만 넣습니다. `.env`, CLI 로그인 파일, `.local-tools/`, `.runtime/`, `artifacts/`, `deliverables/`는 Git에 포함하지 않습니다. `.env`에는 구독 모드용 API 키가 필요하지 않습니다. `LOCAL_GPT_MODEL`, `LOCAL_CLAUDE_MODEL`, `LOCAL_GEMINI_MODEL`로 CLI 모델을 선택할 수 있고, 비어 있으면 CLI 기본값을 사용합니다. `LOCAL_CODEX_BIN`, `LOCAL_CLAUDE_BIN`, `LOCAL_GEMINI_BIN`은 실행 파일 경로를 명시할 때 사용합니다.
+`.env.example`을 `.env`로 복사하여 필요한 설정만 넣습니다. `.env`, CLI 로그인 파일, `.local-tools/`, `.runtime/`, `artifacts/`, `deliverables/`는 Git에 포함하지 않습니다. `.env`에는 구독 모드용 API 키가 필요하지 않습니다. `LOCAL_GPT_MODEL`, `LOCAL_CLAUDE_MODEL`, `LOCAL_GEMINI_MODEL`로 CLI 모델을 선택할 수 있고, 비어 있으면 GPT는 `gpt-6.1-sol`, Claude는 `claude-opus-5-5`를 명시합니다. 두 CLI의 사고 수준은 기본 `high`이며 `LOCAL_GPT_REASONING_EFFORT`, `LOCAL_CLAUDE_REASONING_EFFORT`로 조정합니다. 높은 사고 수준은 구독 사용량과 지연을 늘릴 수 있습니다. 앱의 다른 채팅·프로젝트 기억·MCP가 자동으로 공유되지는 않습니다. `LOCAL_CODEX_BIN`, `LOCAL_CLAUDE_BIN`, `LOCAL_GEMINI_BIN`은 실행 파일 경로를 명시할 때 사용합니다.
 
 ```sh
 npm test
@@ -170,3 +170,7 @@ Google 로그인 버튼과 소유자 제한 인증을 구현했다. Google Cloud
 푸시 성공과 실패는 작업 완료와 별개로 표시한다. 실패하면 로컬 커밋을 보존하고 다음 체크포인트나 설정의 대화·결과 커밋/푸시 버튼으로 재시도한다. 이 버튼은 팀 브랜치도 저장한다. 비밀정보 경로·알려진 키 패턴·심볼릭 링크·지원하지 않는 파일을 제외하고, 푸시 전에는 미전송 과거 커밋 내용도 검사한다. 원격에 다른 변경이 있으면 멈추며 강제 푸시·자동 병합하지 않는다.
 
 이는 프로젝트 회의 작업의 저장 기능이다. Codex 채팅의 최종 답변 후 단발10분 무응답 타이머는 여전히 연결되지 않았으며 기존 반복 감지 자동화를 재활성화하지 않았다.
+
+### 모델과 자료 전달 확인
+
+팀 모드에도 사용자가 선택한 자료의 현재 읽기 전용 사본을 전달합니다. Git 작업 트리에 아직 없는 미커밋 자료도 포함하며, 사본을 원본 파일 수정으로 오해하지 않게 구분합니다. 화면은 요청 모델·사고 수준과 CLI가 보고한 모델을 구분합니다. 모델 보고를 얻지 못하면 미보고로 표시하고 일치한다고 주장하지 않습니다. 명시한 모델과 CLI 보고가 다르면 자동 대체하지 않고 오류로 처리합니다.
