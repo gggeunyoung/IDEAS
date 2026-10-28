@@ -1,12 +1,28 @@
 import {createHash,timingSafeEqual} from 'node:crypto';
 const sameSecret=(a,b)=>timingSafeEqual(createHash('sha256').update(String(a||'')).digest(),createHash('sha256').update(String(b||'')).digest());
 export function workerAddress(value){const url=new URL(value);if(url.protocol!=='https:'||! /^[a-z0-9-]+\.trycloudflare\.com$/.test(url.hostname)||url.port||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw new Error('허용되지 않은 워커 주소입니다.');return url.origin;}
-export function createRemoteProxy({env=process.env,fetchImpl=fetch,connectionStore}={}){
-  let cached=null,cachedAt=0;
+export function createRemoteProxy({env=process.env,fetchImpl=fetch,connectionStore,now=Date.now,connectionTtlMs=300000,refreshCooldownMs=30000}={}){
+  let cached=null,cachedAt=-Infinity,pending=null,version=0,retryAt=0,lastForcedAt=-Infinity;
   const store=connectionStore||{
     async read(){const {get}=await import('@vercel/blob');const result=await get('ideas/worker-connection.json',{access:'private',useCache:false,storeId:env.BLOB_STORE_ID});if(result?.statusCode!==200)return null;return JSON.parse(await new Response(result.stream).text());},
     async write(value){const {put}=await import('@vercel/blob');await put('ideas/worker-connection.json',JSON.stringify(value),{access:'private',addRandomSuffix:false,allowOverwrite:true,storeId:env.BLOB_STORE_ID});}
   };
+  async function connection(force=false){
+    if(!force&&cached&&now()-cachedAt<connectionTtlMs)return cached;
+    if(pending)return pending;
+    if(now()<retryAt){if(cached)return cached;throw new Error('Connection lookup cooling down');}
+    const generation=version;
+    const read=Promise.resolve().then(()=>store.read()).then(value=>{
+      if(value)workerAddress(value.url);
+      if(generation===version){cached=value;cachedAt=now();retryAt=value?0:now()+refreshCooldownMs;}
+      return cached;
+    }).catch(error=>{if(generation===version)retryAt=now()+refreshCooldownMs;if(cached)return cached;throw error;});
+    pending=read;try{return await read;}finally{if(pending===read)pending=null;}
+  }
+  async function refreshConnection(){
+    if(now()-lastForcedAt<refreshCooldownMs)return cached;
+    lastForcedAt=now();return connection(true);
+  }
   const bodyOf=async req=>{let body;if(req.body!==undefined)body=typeof req.body==='string'?req.body:JSON.stringify(req.body);else{const chunks=[];let length=0;for await(const chunk of req){const bytes=Buffer.from(chunk);length+=bytes.length;if(length>150000)throw new Error('요청이 너무 큽니다.');chunks.push(bytes);}body=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks));}if(Buffer.byteLength(body)>150000)throw new Error('요청이 너무 큽니다.');return body;};
   return async function handler(req,res){
     const send=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
@@ -20,19 +36,30 @@ export function createRemoteProxy({env=process.env,fetchImpl=fetch,connectionSto
     if(route==='worker/health'&&(req.method!=='GET'||!sameSecret(req.headers.authorization,'Bearer '+env.IDEAS_BRIDGE_TOKEN)))return send(401,{error:'워커 인증이 필요합니다.'});
     if(route==='worker/register'){
       if(req.method!=='POST'||!sameSecret(req.headers.authorization,'Bearer '+env.IDEAS_BRIDGE_TOKEN)||!req.headers['content-type']?.startsWith('application/json'))return send(401,{error:'워커 인증이 필요합니다.'});
-      try{const data=JSON.parse(await bodyOf(req));const url=workerAddress(data.url);const connection={url,registeredAt:new Date().toISOString()};await store.write(connection);cached=connection;cachedAt=Date.now();return send(200,{registered:true});}catch{return send(503,{error:'워커 연결 주소를 저장하지 못했습니다.'});}
+      try{const data=JSON.parse(await bodyOf(req));const url=workerAddress(data.url);const value={url,registeredAt:new Date(now()).toISOString()};await store.write(value);version++;cached=value;cachedAt=now();retryAt=0;return send(200,{registered:true});}catch{return send(503,{error:'워커 연결 주소를 저장하지 못했습니다.'});}
     }
     if(req.method==='POST'&&(req.headers.origin!==origin||!req.headers['content-type']?.startsWith('application/json')))return send(403,{error:'같은 회의실 화면에서만 요청할 수 있습니다.'});
     if(!['auth/login','auth/config','auth/google','worker/health'].includes(route)&&!/\b__Host-ideas_session=[A-Za-z0-9_-]{43}(?:;|$)/.test(req.headers.cookie||''))return send(401,{error:'회의실에 로그인하세요.'});
     try{
       let address=env.IDEAS_WORKER_URL;
-      if(env.BLOB_STORE_ID||connectionStore){if(!cached||Date.now()-cachedAt>20000){cached=await store.read();cachedAt=Date.now();}address=cached?.url;}
+      const stored=env.BLOB_STORE_ID||connectionStore;
+      if(stored){const force=route==='worker/health'&&req.headers['x-ideas-refresh-connection']==='1';address=(await (force?refreshConnection():connection()))?.url;}
       if(!address)return send(503,{error:'맥 워커가 아직 연결되지 않았습니다. 맥에서 원격 서비스를 실행하세요.'});
       const worker=new URL(workerAddress(address));
       const target=new URL('/api/'+route,worker);for(const [key,value] of incoming.searchParams)if(['roomId','path','after'].includes(key))target.searchParams.set(key,value);
       let body;if(req.method==='POST')body=await bodyOf(req);
       const headers={Authorization:'Bearer '+env.IDEAS_BRIDGE_TOKEN,'Content-Type':'application/json',Cookie:req.headers.cookie||''};
-      const response=await fetchImpl(target,{method:req.method,headers,body,redirect:'error',signal:AbortSignal.timeout(25000)});
+      const forward=url=>fetchImpl(url,{method:req.method,headers,body,redirect:'error',signal:AbortSignal.timeout(25000)});
+      let response;
+      try{response=await forward(target);}catch(error){
+        if(!stored||req.method!=='GET')throw error;
+        const updated=await refreshConnection();if(!updated?.url||updated.url===address)throw error;
+        target.host=new URL(workerAddress(updated.url)).host;response=await forward(target);
+      }
+      // Refresh a stale address after tunnel failure, but never replay a mutating request.
+      if(stored&&req.method==='GET'&&response.status>=500){
+        const updated=await refreshConnection();if(updated?.url&&updated.url!==target.origin){await response.body?.cancel();target.host=new URL(workerAddress(updated.url)).host;response=await forward(target);}
+      }
       if(response.status>=500&&!response.headers.get('content-type')?.includes('application/json'))return send(503,{error:'맥 중계 연결을 복구하고 있습니다. 잠시 후 회의실 연결 다시 확인을 눌러 주세요.'});
       const safeHeaders={'Content-Type':response.headers.get('content-type')||'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};for(const name of ['set-cookie','content-disposition'])if(response.headers.has(name))safeHeaders[name]=response.headers.get(name);
       res.writeHead(response.status,safeHeaders);res.end(Buffer.from(await response.arrayBuffer()));

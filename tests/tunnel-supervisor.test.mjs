@@ -12,7 +12,7 @@ function fixture(fetchImpl){
 const healthy=(instanceId='worker-1')=>new Response(JSON.stringify({healthy:true,instanceId}));
 test('healthy tunnel probes authenticated full route without login challenges or redundant registration',async()=>{
   const calls=[];const f=fixture(async(url,options)=>{calls.push({url,options});return url.endsWith('/register')?new Response('{}'):healthy();});f.address();await pause();f.advance(30000);await f.supervisor.tick();
-  assert.equal(calls.filter(c=>c.url.endsWith('/register')).length,1);assert.equal(calls.filter(c=>c.url.endsWith('/health')).length,4);assert.equal(f.saves.length,1);assert.equal(f.children[0].signals.length,0);
+  assert.equal(calls.filter(c=>c.url.endsWith('/register')).length,1);assert.equal(calls.filter(c=>c.url.endsWith('/health')).length,3);assert.equal(f.saves.length,1);assert.equal(f.children[0].signals.length,0);
   for(const call of calls){assert.equal(call.options.headers.Authorization,'Bearer bridge-secret');assert.equal(call.options.redirect,'error');assert.ok(!call.url.includes('auth/config'));}f.supervisor.stop();
 });
 test('running but unreachable tunnel restarts after three failures; a new address registers automatically',async()=>{
@@ -24,8 +24,8 @@ test('running but unreachable tunnel restarts after three failures; a new addres
 test('one intermittent failure resets after recovery and cannot trigger an unnecessary restart',async()=>{
   let fail=false;const f=fixture(async url=>{if(url.endsWith('/register'))return new Response('{}');if(fail)throw new Error();return healthy();});f.address();await pause();fail=true;f.advance(30000);await f.supervisor.tick();fail=false;await f.supervisor.tick();fail=true;await f.supervisor.tick();await f.supervisor.tick();assert.deepEqual(f.children[0].signals,[]);f.supervisor.stop();
 });
-test('stale Vercel routing is re-registered while the healthy tunnel and worker stay running',async()=>{
-  let registrations=0;const f=fixture(async url=>{if(url.endsWith('/register')){registrations++;return new Response('{}');}return healthy(url.startsWith(origin)?'stale-worker':'current-worker');});f.address();await pause();assert.equal(registrations,2);f.advance(30000);await f.supervisor.tick();assert.equal(registrations,3);assert.deepEqual(f.children[0].signals,[]);f.supervisor.stop();
+test('stale Vercel routing retries registration with backoff while the tunnel stays running',async()=>{
+  let registrations=0;const f=fixture(async url=>{if(url.endsWith('/register')){registrations++;return new Response('{}');}return healthy(url.startsWith(origin)?'stale-worker':'current-worker');});f.address();await pause();assert.equal(registrations,1);await f.supervisor.tick();assert.equal(registrations,1);f.advance(30000);await f.supervisor.tick();assert.equal(registrations,2);assert.deepEqual(f.children[0].signals,[]);f.supervisor.stop();
 });
 test('late registration for a previous tunnel cannot mark the new one registered or overwrite local state',async()=>{
   let release;const oldResponse=new Promise(resolve=>{release=resolve;});let registrations=0;
@@ -46,4 +46,21 @@ test('unresolved tunnel addresses are never published; DNS readiness is bounded 
 });
 test('a new tunnel that never becomes reachable is eventually replaced without publishing it',async()=>{
   const f=fixture(async()=>{throw new Error('unreachable');});f.address();await pause();f.advance(180000);for(let i=0;i<3;i++)await f.supervisor.tick();assert.deepEqual(f.children[0].signals,['SIGTERM']);assert.equal(f.saves.length,0);f.supervisor.stop();
+});
+
+test('24 hours of healthy idle ticks make zero additional Vercel requests',async()=>{
+ const calls=[];const f=fixture(async url=>{calls.push(url);return url.endsWith('/register')?new Response('{}'):healthy();});
+ f.address();await pause();const initial=calls.filter(url=>url.startsWith(origin)).length;assert.equal(initial,2);
+ for(let i=0;i<2880;i++){f.advance(30000);await f.supervisor.tick();}
+ assert.equal(calls.filter(url=>url.startsWith(origin)).length,initial);assert.equal(f.saves.length,1);assert.deepEqual(f.children[0].signals,[]);f.supervisor.stop();
+});
+test('paused Vercel uses exponential registration backoff without stopping Mac work',async()=>{
+ let registrations=0;const f=fixture(async url=>{if(url.startsWith(origin)){registrations++;return new Response('paused',{status:503});}return healthy();});
+ f.address();await pause();assert.equal(registrations,1);
+ for(let i=0;i<2880;i++){f.advance(30000);await f.supervisor.tick();}
+ assert.ok(registrations<60,`registration requests: ${registrations}`);assert.equal(f.saves.length,0);assert.deepEqual(f.children[0].signals,[]);f.supervisor.stop();
+});
+test('a changed worker instance re-registers once even if the tunnel address is unchanged',async()=>{
+ let instance='worker-1',registrations=0;const f=fixture(async url=>{if(url.endsWith('/register')){registrations++;return new Response('{}');}return healthy(instance);});
+ f.address();await pause();instance='worker-2';f.advance(30000);await f.supervisor.tick();f.advance(30000);await f.supervisor.tick();assert.equal(registrations,2);assert.equal(f.saves.length,2);f.supervisor.stop();
 });

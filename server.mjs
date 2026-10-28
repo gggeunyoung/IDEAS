@@ -28,7 +28,7 @@ export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,sync
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
     const url=new URL(req.url,`http://${host}`),route=url.pathname;
     const send=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));};
-    if(req.method==='GET'&&['/','/app.js','/progress.js','/style.css'].includes(route)){
+    if(req.method==='GET'&&['/','/app.js','/progress.js','/polling.js','/style.css'].includes(route)){
       const name=route==='/'?'index.html':route.slice(1);
       res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
       try{const data=await readFile(new URL(`./public/${name}`,import.meta.url));res.writeHead(200,{'Content-Type':name.endsWith('.js')?'text/javascript; charset=utf-8':name.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8'});return res.end(data);}catch{return send(404,{error:'파일을 찾을 수 없습니다.'});}

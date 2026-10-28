@@ -1,3 +1,4 @@
+import {pollDelay,hasJobUpdate,waitForPoll} from './polling.js';
 import {newProgress,progressEvent,progressJob,progressView,replayHistory,jobFailureMessage} from './progress.js';
 const $=id=>document.getElementById(id);
 // Shown by default in index.html; only a page actually served by the room server reaches this line.
@@ -110,7 +111,7 @@ function renderProgress(){
   }}
   $('progress-hint').textContent=view.state==='running'?'맥에서 작업이 실행 중입니다. 세부 상태는 CLI가 실제로 보고한 활동만 표시합니다.':view.state==='unknown'?'작업은 맥에서 계속될 수 있습니다. 연결 상태와 AI 실행 상태는 별개입니다.':executionProgress.terminal==='done'?'이번 실행이 끝났습니다. 종료 사유와 결과물을 확인하세요.':'종료 사유를 확인한 뒤 다시 시작하거나 이전 작업을 조회하세요.';
 }
-function startProgress(startedAt=null){executionProgress=newProgress(startedAt);executionProgress.git=JSON.parse(JSON.stringify(config?.gitSync||{}));if(localServer)executionProgress.staleAfterMs=30000;renderProgress();}
+function startProgress(startedAt=null){executionProgress=newProgress(startedAt);executionProgress.staleAfterMs=45000;executionProgress.git=JSON.parse(JSON.stringify(config?.gitSync||{}));if(localServer)executionProgress.staleAfterMs=30000;renderProgress();}
 function progressFailure(terminal='unknown'){if(!executionProgress)return;if(terminal==='unknown')executionProgress.connection='offline';else{executionProgress.terminal=terminal;executionProgress.finishedAt=Date.now();for(const a of Object.values(executionProgress.agents))a.active=false;}renderProgress();}
 setInterval(()=>{if(executionProgress&&!executionProgress.terminal)renderProgress();},1000);
 function selected(){return [...document.querySelectorAll('[name=participant]:checked')].map(e=>e.value);}
@@ -184,15 +185,16 @@ function onEvent(e,mode,workflow,defer=false){
   if(e.type==='artifact'){artifactLink(e);try{localStorage.setItem('ideas-artifact:'+currentRoom,JSON.stringify({id:e.id}));}catch{}}
   if(e.type==='done'){$('status').textContent=['goal','team'].includes(workflow)?`${workflow==='team'?'팀 작업':'목표 실행'} 종료 · ${goalLabels[messages.findLast(m=>m.type==='goal'&&m.final)?.status]||'결과 확인 필요'}`:'회의가 끝났습니다. 결과물을 다운로드하거나 다음 방향을 입력하세요.';}
 }
-const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function remoteJson(route,options){const response=await fetch(route,{...options,signal:options?.signal||AbortSignal.timeout(15000)});let data;try{data=await response.json();}catch{throw new Error('원격 연결 응답을 읽지 못했습니다. 잠시 후 다시 조회하세요.');}if(!response.ok){if(response.status===401)showLogin();const error=new Error(data.error||'원격 요청에 실패했습니다.');error.status=response.status;throw error;}return data;}
 async function pollJob(id,onUpdate){
-  let cursor=0,failures=0;
+  let cursor=0,failures=0,idleRounds=0,previousStatus;
   while(true){
-    let job;try{job=await remoteJson(`/api/jobs/${id}?after=${cursor}`);failures=0;}catch(error){progressFailure();if(error.status===401)throw new Error('로그인이 만료됐습니다. 다시 로그인한 뒤 이전 작업을 조회하세요.');if(error.status===404){localStorage.removeItem('ideas-pending-job');$('resume-job').hidden=true;remoteJob=null;throw error;}if(++failures>=5)throw new Error(error.message+' 작업은 맥에서 계속 실행될 수 있습니다. 상단의 이전 작업 다시 조회를 누르세요.');$('status').textContent=`결과 연결 재시도 ${failures}/5 · 맥의 작업 완료 여부는 아직 확인되지 않았습니다.`;await pause(3000);continue;}
+    if(document.hidden)await waitForPoll(document);
+    let job;try{job=await remoteJson(`/api/jobs/${id}?after=${cursor}`);failures=0;}catch(error){progressFailure();if(error.status===401)throw new Error('로그인이 만료됐습니다. 다시 로그인한 뒤 이전 작업을 조회하세요.');if(error.status===404){localStorage.removeItem('ideas-pending-job');$('resume-job').hidden=true;remoteJob=null;throw error;}if(++failures>=5)throw new Error(error.message+' 작업은 맥에서 계속 실행될 수 있습니다. 상단의 이전 작업 다시 조회를 누르세요.');$('status').textContent=`결과 연결 재시도 ${failures}/5 · 맥의 작업 완료 여부는 아직 확인되지 않았습니다.`;await waitForPoll(document,pollDelay(failures));continue;}
+    idleRounds=hasJobUpdate(previousStatus,job)?0:idleRounds+1;previousStatus=job.status;
     await onUpdate?.(job);if(executionProgress&&job.type==='meeting'){progressJob(executionProgress,job);renderProgress();}cursor=job.cursor;
     if(['done','failed','cancelled','interrupted'].includes(job.status)){localStorage.removeItem('ideas-pending-job');$('resume-job').hidden=true;remoteJob=null;if(job.status!=='done')throw new Error(jobFailureMessage(job));return job.result;}
-    await pause(2000);
+    await waitForPoll(document,pollDelay(idleRounds));
   }
 }
 async function submitRemoteJob(type,request,onUpdate){

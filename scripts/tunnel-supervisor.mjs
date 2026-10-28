@@ -1,22 +1,30 @@
 import {workerAddress} from '../remote-proxy.mjs';
 
 // Keep the worker and its jobs alive when only the public tunnel has stopped working.
-export function createTunnelSupervisor({origin,bridgeToken,spawnTunnel,saveConnection=async()=>{},log=()=>{},fetchImpl=fetch,now=Date.now,setTimer=setTimeout,clearTimer=clearTimeout,startupGraceMs=20000,startupTimeoutMs=90000,addressReadyTimeoutMs=180000,failureLimit=3}={}){
+export function createTunnelSupervisor({origin,bridgeToken,spawnTunnel,saveConnection=async()=>{},log=()=>{},fetchImpl=fetch,now=Date.now,setTimer=setTimeout,clearTimer=clearTimeout,startupGraceMs=20000,startupTimeoutMs=90000,addressReadyTimeoutMs=180000,failureLimit=3,registrationRetryMs=30000,maxRegistrationRetryMs=1800000}={}){
   let current=null,stopped=false,retryTimer,busy=false;
   const active=session=>!stopped&&current===session&&!session.restarting;
   const request=(url,options={})=>fetchImpl(url,{...options,redirect:'error',signal:AbortSignal.timeout(10000),headers:{Authorization:'Bearer '+bridgeToken,...options.headers}});
-  async function register(session,force=false){
-    if(!active(session)||!session.url||session.registering||!force&&session.registered)return;
+  async function register(session){
+    if(!active(session)||!session.url||session.registering||session.registered||now()<session.nextRegistrationAt)return;
     session.registering=true;const address=session.url;
     try{
       const response=await request(origin+'/api/worker/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:address})});
       if(!response.ok)throw new Error();
       if(!active(session)||session.url!==address)return;
+      // Only verify Vercel routing when publishing a new address, never on idle ticks.
+      const routed=await health(origin,true);
+      if(routed!==session.instanceId)throw new Error();
+      if(!active(session))return;
       await saveConnection({url:address,origin,registeredAt:new Date(now()).toISOString()});
       if(!active(session))return;
-      session.registered=true;log('외부 응답을 확인한 맥 워커 주소 등록 완료');
-    }catch{if(active(session)){session.registered=false;log('Vercel 연결 등록 대기 중 · 다음 점검에서 재시도');}}
-    finally{session.registering=false;}
+      session.registered=true;session.registrationFailures=0;session.nextRegistrationAt=0;
+      log('외부 응답을 확인한 맥 워커 주소 등록 완료');
+    }catch{if(active(session)){
+      const delay=Math.min(maxRegistrationRetryMs,registrationRetryMs*2**Math.min(session.registrationFailures++,20));
+      session.nextRegistrationAt=now()+delay;
+      log(`Vercel 연결 등록 대기 · ${Math.ceil(delay/1000)}초 후 재시도 가능 (맥 작업은 계속됩니다)`);
+    }}finally{session.registering=false;}
   }
   function schedule(){if(!stopped&&!retryTimer)retryTimer=setTimer(()=>{retryTimer=null;start();},5000);}
   function restart(session,reason){
@@ -30,7 +38,7 @@ export function createTunnelSupervisor({origin,bridgeToken,spawnTunnel,saveConne
     if(stopped)return;
     if(current)return;
     let child;try{child=spawnTunnel();}catch{log('중계 프로그램 실행 실패 · 다시 시도합니다.');schedule();return;}
-    const session={child,url:null,registered:false,registering:false,startedAt:now(),failures:0,restarting:false,killTimer:null};current=session;
+    const session={child,url:null,registered:false,registering:false,registrationFailures:0,nextRegistrationAt:0,startedAt:now(),failures:0,restarting:false,killTimer:null};current=session;
     let buffer='';child.stderr.on('data',chunk=>{
       if(!active(session))return;
       buffer+=chunk.toString();const match=/https:\/\/[a-z0-9-]+\.trycloudflare\.com(?=[\s|]|$)/.exec(buffer);
@@ -40,8 +48,8 @@ export function createTunnelSupervisor({origin,bridgeToken,spawnTunnel,saveConne
     const ended=()=>{if(current!==session)return;clearTimer(session.killTimer);current=null;if(!stopped){log('맥 중계 연결 종료 · 5초 후 다시 연결');schedule();}};
     child.on('error',()=>{log('중계 프로그램 실행 오류');ended();});child.on('exit',ended);
   }
-  async function health(base){
-    const response=await request(base+'/api/worker/health');if(!response.ok)throw new Error();
+  async function health(base,refresh=false){
+    const response=await request(base+'/api/worker/health',refresh?{headers:{'X-Ideas-Refresh-Connection':'1'}}:{});if(!response.ok)throw new Error();
     const data=await response.json();if(data.healthy!==true||typeof data.instanceId!=='string'||!data.instanceId)throw new Error();return data.instanceId;
   }
   async function tick(initial=false){
@@ -64,11 +72,9 @@ export function createTunnelSupervisor({origin,bridgeToken,spawnTunnel,saveConne
         if(session.failures>=failureLimit)restart(session,'외부 중계 연결 끊김 감지');return;
       }
       if(!active(session))return;
-      session.verified=true;session.failures=0;
+      if(session.instanceId&&session.instanceId!==direct){session.registered=false;session.nextRegistrationAt=0;session.registrationFailures=0;}
+      session.instanceId=direct;session.verified=true;session.failures=0;
       if(!session.registered)await register(session);
-      if(!active(session))return;
-      try{const routed=await health(origin);if(routed!==direct)throw new Error();session.registered=true;}
-      catch{if(active(session)){session.registered=false;await register(session,true);}}
     }finally{busy=false;}
   }
   function stop(){stopped=true;clearTimer(retryTimer);retryTimer=null;if(current){clearTimer(current.killTimer);current.child.kill('SIGTERM');}}

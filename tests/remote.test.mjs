@@ -151,3 +151,38 @@ test('tunnel HTML outage pages become a readable login recovery error without up
   const server=http.createServer(createRemoteProxy({env:{IDEAS_BRIDGE_TOKEN:'bridge',IDEAS_WORKER_URL:'https://test.trycloudflare.com'},fetchImpl:async()=>new Response('<html>Cloudflare 1016</html>',{status:530,headers:{'Content-Type':'text/html','Set-Cookie':'upstream=unexpected'}})}));const url=await listen(server);t.after(()=>close(server));
   const response=await fetch(url+'/api/auth/config');assert.equal(response.status,503);assert.match(response.headers.get('content-type'),/application\/json/);assert.match((await response.json()).error,/중계 연결.*복구/);assert.equal(response.headers.get('set-cookie'),null);
 });
+
+test('connection lookups share in-flight reads and use five-minute cache without caching user responses',async t=>{
+ let time=0,reads=0,release;const gate=new Promise(resolve=>release=resolve),cookies=[];
+ const server=http.createServer(createRemoteProxy({env:{IDEAS_BRIDGE_TOKEN:'bridge'},now:()=>time,connectionStore:{read:async()=>{reads++;await gate;return {url:'https://cached-worker.trycloudflare.com'};}},fetchImpl:async(url,options)=>{cookies.push(options.headers.Cookie);return new Response('{}');}}));const base=await listen(server);t.after(()=>close(server));
+ const request=()=>fetch(base+'/api/rooms',{headers:{Cookie:'__Host-ideas_session='+'a'.repeat(43)}});
+ const first=Array.from({length:12},request);await eventually(()=>reads===1);release();await Promise.all(first);assert.equal(reads,1);assert.equal(cookies.length,12);
+ time=299999;await request();assert.equal(reads,1);time=300000;await Promise.all([request(),request()]);assert.equal(reads,2);
+});
+test('failed storage reads are backed off and a GET refreshes an obsolete worker address',async t=>{
+ let time=0,reads=0,failStorage=false,current='https://old-worker.trycloudflare.com';const forwarded=[];
+ const server=http.createServer(createRemoteProxy({env:{IDEAS_BRIDGE_TOKEN:'bridge'},now:()=>time,connectionStore:{read:async()=>{reads++;if(failStorage)throw new Error('storage unavailable');return {url:current};}},fetchImpl:async(url,options)=>{forwarded.push({url:String(url),method:options.method});if(String(url).includes('old-worker')&&time>0)throw new Error('tunnel ended');return new Response('{}');}}));const base=await listen(server);t.after(()=>close(server));
+ const headers={Cookie:'__Host-ideas_session='+'a'.repeat(43)};await fetch(base+'/api/rooms',{headers});assert.equal(reads,1);
+ time=1000;current='https://new-worker.trycloudflare.com';assert.equal((await fetch(base+'/api/rooms',{headers})).status,200);assert.equal(reads,2);assert.match(forwarded.at(-1).url,/new-worker/);
+ time=400000;failStorage=true;for(let i=0;i<5;i++)assert.equal((await fetch(base+'/api/rooms',{headers})).status,200);assert.equal(reads,3);
+});
+test('unauthorized refresh headers cannot force Blob reads; authorized refreshes are rate bounded',async t=>{
+ let reads=0;const server=http.createServer(createRemoteProxy({env:{IDEAS_BRIDGE_TOKEN:'bridge'},connectionStore:{read:async()=>{reads++;return {url:'https://test-worker.trycloudflare.com'};}},fetchImpl:async()=>new Response('{}')}));const base=await listen(server);t.after(()=>close(server));
+ assert.equal((await fetch(base+'/api/worker/health',{headers:{'X-Ideas-Refresh-Connection':'1'}})).status,401);assert.equal(reads,0);
+ const headers={Authorization:'Bearer bridge','X-Ideas-Refresh-Connection':'1'};
+ for(let i=0;i<10;i++)assert.equal((await fetch(base+'/api/worker/health',{headers})).status,200);assert.equal(reads,1);
+});
+test('late storage lookup cannot overwrite a newly registered address',async t=>{
+ let release;const gate=new Promise(resolve=>release=resolve),targets=[];
+ const server=http.createServer(createRemoteProxy({env:{IDEAS_BRIDGE_TOKEN:'bridge'},connectionStore:{read:async()=>{await gate;return {url:'https://old-worker.trycloudflare.com'};},write:async()=>{}},fetchImpl:async url=>{targets.push(String(url));return new Response('{}');}}));const base=await listen(server);t.after(()=>close(server));
+ const headers={Cookie:'__Host-ideas_session='+'a'.repeat(43)};const pending=fetch(base+'/api/rooms',{headers});await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal((await fetch(base+'/api/worker/register',{method:'POST',headers:{Authorization:'Bearer bridge','Content-Type':'application/json'},body:JSON.stringify({url:'https://new-worker.trycloudflare.com'})})).status,200);
+ release();await pending;await fetch(base+'/api/rooms',{headers});assert.ok(targets.every(url=>url.includes('new-worker')));
+});
+
+test('failed mutating requests are never replayed after tunnel changes',async t=>{
+ let time=0,reads=0,posts=0;const server=http.createServer(createRemoteProxy({env:{IDEAS_BRIDGE_TOKEN:'bridge',IDEAS_PUBLIC_ORIGIN:'https://ideas.example'},now:()=>time,connectionStore:{read:async()=>{reads++;return {url:time?'https://new-worker.trycloudflare.com':'https://old-worker.trycloudflare.com'};}},fetchImpl:async(url,options)=>{if(options.method==='POST'){posts++;throw new Error('connection closed after possible delivery');}return new Response('{}');}}));const base=await listen(server);t.after(()=>close(server));
+ const headers={Cookie:'__Host-ideas_session='+'a'.repeat(43)};await fetch(base+'/api/rooms',{headers});time=1000;
+ const response=await fetch(base+'/api/jobs',{method:'POST',headers:{...headers,Origin:'https://ideas.example','Content-Type':'application/json'},body:'{}'});
+ assert.equal(response.status,503);assert.equal(posts,1);assert.equal(reads,1);
+});
