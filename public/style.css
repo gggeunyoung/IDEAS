@@ -118,3 +118,43 @@ footer{padding:8px 14px 10px}textarea{font-size:16px;min-height:40px}.send-row s
   #log{padding:16px 10px 20px}
   .bubble{padding:22px 20px}
 }
+
+/* Project controls live beside the conversation, never above its first line. */
+#room-view .layout{display:grid;grid-template-columns:244px minmax(0,1fr);position:relative}
+#room-view .layout[data-sidebar-collapsed=true]{grid-template-columns:42px minmax(0,1fr)}
+#room-sidebar{position:relative;min-width:0;height:100%;overflow:hidden;background:#fff;border-right:1px solid #e0e6dd}
+#toggle-room-sidebar{display:block;margin:10px 8px 8px auto;width:28px;height:30px;padding:0;font-size:24px;line-height:1;background:transparent;color:#647669;border:1px solid #dce4d7;border-radius:6px}
+#room-sidebar-content{height:calc(100% - 48px);overflow-y:auto;overscroll-behavior:contain;padding-bottom:20px}
+#room-sidebar .room-header{display:block;padding:12px 18px 20px;border-bottom:1px solid #e8ece5}
+#room-sidebar .room-heading h1{font-size:18px;line-height:1.5;letter-spacing:-.3px}
+#room-sidebar .room-heading p{display:block;font-size:11px;line-height:1.8;margin-top:8px}
+#room-sidebar .actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:18px}
+#room-sidebar .actions>.secondary{padding:9px 6px;font-size:12px}
+#room-sidebar .room-more{grid-column:1/-1;margin:0}
+#room-sidebar .room-more>summary{font-size:12px;padding:9px 4px}
+#room-sidebar .room-more>div{position:static;min-width:0;margin-top:4px;border:0;border-radius:0;padding:0;box-shadow:none}
+#room-sidebar .conversation-nav{display:block;padding:18px;border-bottom:1px solid #e8ece5;font-size:11px;line-height:1.6}
+#room-sidebar .conversation-nav>div{margin-top:10px;justify-content:space-between;gap:8px}
+#room-sidebar .execution-progress{padding:18px;margin:0;border:0;border-bottom:1px solid #e1e8df;background:#f3f7f2}
+#room-sidebar .progress-summary{display:flex;align-items:start;flex-direction:column;gap:10px}
+#room-sidebar .progress-heading{font-size:12px;line-height:1.7}
+#room-sidebar #progress-meta{font-size:11px;line-height:1.8;flex:auto;overflow-wrap:anywhere}
+#room-sidebar #progress-detail{max-height:none;padding-top:12px;overflow:visible}
+#room-sidebar .progress-agent{grid-template-columns:1fr;gap:5px;overflow-wrap:anywhere}
+#room-sidebar .progress-agent small{grid-column:1}
+#room-sidebar #git-sync{overflow-wrap:anywhere}
+#room-sidebar .git-sync-row,#room-sidebar #progress-hint{font-size:11px;line-height:1.8}
+#room-view main{min-width:0;min-height:0}
+#room-view #log{padding-top:22px}
+#conversation-footer{padding-left:max(20px,calc((100% - 920px)/2));padding-right:max(20px,calc((100% - 920px)/2))}
+@media(max-width:760px){
+  #room-view .layout,#room-view .layout[data-sidebar-collapsed=true]{grid-template-columns:38px minmax(0,1fr)}
+  #room-sidebar{z-index:15;overflow:visible;background:#fff}
+  #toggle-room-sidebar{margin:10px auto;width:27px}
+  #room-sidebar-content{position:absolute;left:38px;top:0;width:min(260px,calc(100vw - 60px));height:100%;background:#fff;border-right:1px solid #dce4d7;box-shadow:8px 0 24px #25342e12}
+  #room-sidebar .room-heading{min-width:0}
+  #room-sidebar .room-header{padding-top:20px}
+  #room-view #log{padding:14px 8px 20px}
+  #conversation-footer{padding-left:10px;padding-right:10px}
+  #room-view .bubble,#room-view .bubble.user{padding:20px 16px}
+}
