@@ -1,3 +1,5 @@
+import {understandingInstructions} from './collaboration-policy.mjs';
+
 export const catalog = [
   {id:'gpt', name:'GPT', key:'OPENAI_API_KEY', modelKey:'OPENAI_MODEL', model:'gpt-6.1-sol', input:2, output:10},
   {id:'claude', name:'Claude', key:'ANTHROPIC_API_KEY', modelKey:'ANTHROPIC_MODEL', model:'claude-sonnet-5-5', input:2, output:10},
@@ -18,7 +20,7 @@ export function promptFor(name, history, review=null, {webSearch=false}={}) {
   const task = review
     ? `아래는 이번 라운드의 독립 답변입니다. 다른 참가자의 이름을 명시하고, 동의하는 점과 반대 또는 보완할 점을 검토하세요. 의견 차이를 지우지 말고 다음 실험 하나를 제안하세요.\n${review.map(m=>`${m.speaker}: ${m.text}`).join('\n\n')}`
     : '현재 사용자 메시지에 독립적으로 답하세요. 핵심 제안, 이유, 확인할 질문 또는 실행할 다음 행동을 포함하세요.';
-  return {system, user:`공동 대화 기록:\n${transcript}\n\n${task}`};
+  return {system:system+understandingInstructions(), user:`공동 대화 기록:\n${transcript}\n\n${task}`};
 }
 
 export async function callProvider(id, prompt, {env=process.env,fetchImpl=fetch,signal,maxTokens=1024}={}) {

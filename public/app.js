@@ -22,7 +22,7 @@ if(typeof preferences.webSearch==='boolean')$('web-search').checked=preferences.
 function savePreferences(){preferences={workflowVersion:2,execution:$('team-execution').value,teamFocus:$('team-focus').value,mode:$('mode').value,workflow:$('workflow').value,writer:$('writer').value,review:$('review').checked,webSearch:$('web-search').checked};try{localStorage.setItem('ideas-settings',JSON.stringify(preferences));}catch{}}
 
 const goalLabels={complete:'완료',field_pending:'현장 검증 대기',blocked:'해결 장애',budget_exhausted:'실행 예산 도달',stalled:'진전 없이 반복',cancelled:'사용자 중단',failed:'실행 실패',goal_running:'목표 실행 중',need_user:'사용자 결정 필요'};
-const phases={team:'팀 작업',implement:'실제 구현',execute:'실제 작업 상태',plan:'작업 계획',draft:'파일 초안',review:'다른 AI 검토',final:'검토 반영 수정본'};
+const phases={'team-plan':'독립 접근법',team:'팀 작업',implement:'실제 구현',execute:'실제 작업 상태',plan:'작업 계획',draft:'파일 초안',review:'다른 AI 검토',final:'검토 반영 수정본'};
 const stage=m=>phases[m.phase]|| (m.round===3?'초안 검토':m.round===2?(m.workflow==='draft'?'작성자 초안':'상호 검토'):'독립 제안');
 function save(){try{localStorage.setItem('ideas-room:'+currentRoom,JSON.stringify(messages));}catch{$('status').textContent='브라우저 저장에 실패했습니다. 회의록을 내보내세요.';}}
 function inlineText(root,text){
@@ -123,9 +123,10 @@ function updateWriter(){
   $('writer-field').firstChild.textContent=$('workflow').value==='team'?'먼저 시작할 에이전트':'초안 작성자';
   if(config){const available=config.pcWork?.available===true;$('team-execution').querySelector('[value=pc]').disabled=!available;if(!available)$('team-execution').value='project';$('pc-work-hint').textContent=available?`프로젝트 작업 트리와 ${config.pcWork.directory}에서 실행합니다. 패키지 설치·네트워크 사용 가능. GUI 앱 제어는 연결되지 않았습니다. 추가 폴더는 Git 자동 저장 대상이 아닙니다.`:'현재 워커에서는 맥 직접 작업을 지원하지 않습니다.';}
   $('team-budget').hidden=$('workflow').value!=='team';$('review').closest('label').hidden=$('workflow').value==='team';
-  for(const option of $('team-turns').options)option.disabled=$('team-focus').value==='research'&&Number(option.value)<6;
-  if($('team-focus').value==='research'&&Number($('team-turns').value)<6)$('team-turns').value='16';
+  for(const option of $('team-turns').options)option.disabled=$('team-focus').value==='research'&&Number(option.value)<8;
+  if($('team-focus').value==='research'&&Number($('team-turns').value)<8)$('team-turns').value='16';
   $('goal-budget').hidden=$('workflow').value!=='goal';
+  if(config)$('policy-runtime-status').textContent=config.collaborationPolicy?.version===1?'이 맥 워커에 기본 규칙이 적용되어 있습니다.':'맥 워커를 업데이트해야 이 기본 규칙으로 실행할 수 있습니다.';
   if(config)$('room-summary').textContent=selected().map(id=>config.participants.find(p=>p.id===id)?.name||id).join(' · ')+($('workflow').value==='team'?' · '+($('team-focus').value==='research'?'리서치·기획':'구현·테스트')+($('team-execution').value==='pc'?' · 맥 직접 작업':' · 프로젝트 제한'):' · 함께 대화 중');
   $('limits').textContent=$('workflow').value==='team'?($('team-focus').value==='research'?'시간·차례 예산 안에서 조사·대안·반론·보완을 계속합니다. 파일 수정이 없다고 3차례 만에 끝내지 않습니다. 근거·분석·기획 파일과 두 사람의 검토가 필요합니다.':'두 에이전트가 설정한 시간·차례 안에서 교대로 구현하고 확인합니다.'):$('workflow').value==='goal'?'목표 실행은 설정한 시간·호출 예산 안에서 반복합니다. 실제 테스트와 다른 AI 검토를 거쳐 종료 상태를 남깁니다.':$('workflow').value==='files'?'구독 참가자 2명 · 최대 5회 호출 · 검토 필수. 파일은 별도 폴더에 저장하며 원본에 적용하지 않습니다.':'한 번에 최대 6회 호출. 자동 반복하지 않습니다. 원본 파일은 수정하지 않습니다.';
 }

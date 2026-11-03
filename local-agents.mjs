@@ -235,7 +235,7 @@ export function parseTeamTurn(id,raw){
   for(const key of ['message','workNotes','next','question'])report[key]=typeof report[key]==='string'?report[key].slice(0,key==='message'?12000:4000):'';
   return {session,report,usage,actions,model};
 }
-export async function callTeamAgent(id,prompt,{cwd,session,env=process.env,signal,runner=runProcess,outputSchema,webSearch=false,timeoutMs=900000,platform=process.platform,onActivity,pcDirectory}={}){
+export async function callTeamAgent(id,prompt,{cwd,session,env=process.env,signal,runner=runProcess,outputSchema,webSearch=false,timeoutMs=900000,platform=process.platform,onActivity,pcDirectory,readOnly=false}={}){
   if(pcDirectory&&platform!=='darwin')throw new Error('맥 직접 작업 모드는 macOS에서만 지원합니다.');
   if(!['gpt','claude'].includes(id))throw new Error('팀 모드는 GPT·Claude 구독 에이전트만 지원합니다.');
   const p=catalog.find(p=>p.id===id),clean=subscriptionEnv(env),command=await executableFor(id,env),{model,reasoningEffort}=executionProfile(id,env);
@@ -248,12 +248,12 @@ export async function callTeamAgent(id,prompt,{cwd,session,env=process.env,signa
     if(id==='gpt'){
       const schemaPath=path.join(scratch,'output-schema.json');await writeFile(schemaPath,JSON.stringify(outputSchema),{mode:0o600});
       const windowsSandbox=platform==='win32'?await codexWindowsSandbox(env):null;
-      args=[...codexTeamFlags,'-c',`model_reasoning_effort="${reasoningEffort}"`,'-c',`web_search="${webSearch?'live':'disabled'}"`,...(windowsSandbox?['-c',`windows.sandbox="${windowsSandbox}"`]:[]),'exec','--ignore-user-config','--ignore-rules','--sandbox','workspace-write',...(pcDirectory?['--add-dir',pcDirectory,'-c','sandbox_workspace_write.network_access=true']:[]),'--json','--color','never','-C',cwd,'--output-schema',schemaPath,...(model?['--model',model]:[]),...(session?['resume',session]:[]),'-'];
+      args=[...codexTeamFlags,'-c',`model_reasoning_effort="${reasoningEffort}"`,'-c',`web_search="${webSearch?'live':'disabled'}"`,...(windowsSandbox?['-c',`windows.sandbox="${windowsSandbox}"`]:[]),'exec','--ignore-user-config','--ignore-rules','--sandbox',readOnly?'read-only':'workspace-write',...(!readOnly&&pcDirectory?['--add-dir',pcDirectory,'-c','sandbox_workspace_write.network_access=true']:[]),'--json','--color','never','-C',cwd,'--output-schema',schemaPath,...(model?['--model',model]:[]),...(!readOnly&&session?['resume',session]:[]),'-'];
     }else{
-      claudeSession=session||randomUUID();
-      const base=pcDirectory?['Read','Edit','Write','Glob','Grep']:claudeTeamAllowed;
+      claudeSession=(!readOnly&&session)||randomUUID();
+      const base=readOnly?['Read','Glob','Grep']:pcDirectory?['Read','Edit','Write','Glob','Grep']:claudeTeamAllowed;
       const tools=webSearch?[...base,'WebSearch','WebFetch']:base;
-      args=['--effort',reasoningEffort,'--print','--output-format','stream-json','--verbose','--include-partial-messages',session?'--resume':'--session-id',claudeSession,'--permission-mode','acceptEdits','--tools',`Read,Edit,Write,Glob,Grep,Bash${webSearch?',WebSearch,WebFetch':''}`,'--allowedTools',tools.join(','),'--disallowedTools','mcp__*','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--safe-mode',...(pcDirectory?['--restricted','--add-dir',pcDirectory]:[]),'--disable-slash-commands','--setting-sources','','--settings',JSON.stringify(pcDirectory?claudePcSettings(pcDirectory):{disableAllHooks:true,forceLoginMethod:'claudeai'}),'--max-turns','80','--json-schema',JSON.stringify(outputSchema),...(model?['--model',model]:[])];
+      args=['--effort',reasoningEffort,'--print','--output-format','stream-json','--verbose','--include-partial-messages',!readOnly&&session?'--resume':'--session-id',claudeSession,'--permission-mode',readOnly?'default':'acceptEdits','--tools',`${readOnly?'Read,Glob,Grep':'Read,Edit,Write,Glob,Grep,Bash'}${webSearch?',WebSearch,WebFetch':''}`,'--allowedTools',tools.join(','),'--disallowedTools','mcp__*','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--safe-mode',...(!readOnly&&pcDirectory?['--restricted','--add-dir',pcDirectory]:[]),'--disable-slash-commands','--setting-sources','','--settings',JSON.stringify(!readOnly&&pcDirectory?claudePcSettings(pcDirectory):{disableAllHooks:true,forceLoginMethod:'claudeai'}),'--max-turns',readOnly?'12':'80','--json-schema',JSON.stringify(outputSchema),...(model?['--model',model]:[])];
     }
     const result=await runner(command,args,{cwd,env:clean,input:`${prompt.system}\n\n${prompt.user}`,signal,timeout:timeoutMs,limit:20_000_000,onStdout:createActivityReporter(id,onActivity)});
     if(result.code!==0&&id==='claude')throw new Error(`${p.name} CLI 호출 실패. 계정 로그인·구독 한도·CLI 설정을 확인하세요. API로 대체하지 않았습니다.`);

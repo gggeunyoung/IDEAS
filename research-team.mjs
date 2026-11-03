@@ -12,7 +12,7 @@ export function researchInstructions(){return `\n이번 팀은 리서치·기획
 - research/sources.md에 출처 URL·확인 날짜·무엇을 뒷받침하는지, research/analysis.md에 비교·대안·반론·수정 근거, research/proposal.md에 추천안·선정 이유·최소 기능·검증 방법·미해결 질문을 누적 저장하세요. 세 파일은 처음부터 완성할 필요가 없습니다. 웹 공유용 요약은 각 문서1만자 이하로 정리하고 더 긴 원자료·노트는 다른 파일에 보존하세요.
 - research.checks는 이번까지 직접 검토한 항목만 true로 보고하세요. 상대가 true라고 쓴 것만으로 동의하지 마세요. 기준: ${Object.entries(researchChecks).map(([k,v])=>k+'='+v).join(', ')}.
 - research.delta에는 이번에 새로 확인한 근거·반론·수정한 판단을 구체적으로 적으세요. 같은 말을 바꿔 쓰는 것은 진전이 아닙니다.
-- 최소6차례와 두 사람의 완료 기준 확인, 실제 저장 자료를 통과하기 전에는 완료로 끝나지 않습니다. 차례 수를 채우기 위한 형식적 동의는 하지 마세요. 미확인 범위를 숨긴 채 전부 조사했다고 말하지 마세요.
+- 독립 접근법 2차례와 작업 최소6차례, 두 사람의 완료 기준 확인, 실제 저장 자료를 통과하기 전에는 완료로 끝나지 않습니다. 차례 수를 채우기 위한 형식적 동의는 하지 마세요. 미확인 범위를 숨긴 채 전부 조사했다고 말하지 마세요.
 - 예산의 마지막2차례에는 현재까지의 조사·기획 파일을 정리하고 남은 조사 질문·이어서 할 일을 저장하세요. 예산 소진은 완료가 아닙니다. 사용자 결정이 꼭 필요하지 않으면 가정을 밝히고 계속하세요.\n`;}
 export async function researchArtifacts(workspace){
   const root=await realpath(workspace),missing=[];let sources='';

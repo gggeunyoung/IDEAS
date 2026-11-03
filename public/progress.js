@@ -27,7 +27,7 @@ export function progressView(p,now=Date.now()){
   const state=p.terminal?'finished':stale?'unknown':'running';
   const title=p.terminal?({done:'작업 종료',failed:'작업 실패',cancelled:'사용자 중단',interrupted:'워커 재시작으로 중단'}[p.terminal]||'실행 상태 확인 필요'):stale?'연결 확인 중 · 실행 여부 미확인':active.length?`${active.map(a=>a.speaker).join(' · ')} 작업 중`:'맥에서 다음 단계 진행 중';
   return {state,title,elapsed:p.startedAt?`전체 경과 ${duration((p.finishedAt||now)-p.startedAt)}`:'전체 시작 시각 미기록',connection:p.checkedAt?`마지막 연결 확인 ${duration(now-p.checkedAt)} 전`:'맥 연결 확인 대기',answers:`답변 ${p.answers}개 수신`,agents:active.map(a=>({
-    speaker:a.speaker,detail:`${a.round?`${a.round}번째 차례 · `:''}${activityLabels[a.activity]}${a.startedAt?` · ${duration(now-a.startedAt)} 경과`:''}`,
+    speaker:a.speaker,detail:`${a.round?`${a.round}번째 차례 · `:''}${a.phase==='team-plan'?'독립 접근법 · ':''}${activityLabels[a.activity]}${a.startedAt?` · ${duration(now-a.startedAt)} 경과`:''}`,
     note:stale?'웹 연결이 끊겨 현재 AI 활동을 확인할 수 없습니다.':a.lastActivity?`마지막 AI 활동 ${duration(now-a.lastActivity)} 전${now-a.lastActivity>90000?' · 새 활동 보고를 기다리고 있습니다.':''}`:'세부 활동 보고 대기 · 응답 생성과 도구 작업을 아직 구분할 수 없습니다.'
   }))};
 }

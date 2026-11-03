@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm,realpath,access} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
+import {guideSections,projectGuidePath} from '../collaboration-policy.mjs';
 import {runTeamWorkflow,teamBudget,turnSchema} from '../team-workflow.mjs';
 import {callTeamAgent,parseTeamTurn} from '../local-agents.mjs';
 import {validateRequest} from '../room.mjs';
@@ -17,12 +18,20 @@ async function project(dir,name='proj'){
   await git(root,['remote','add','origin',`https://github.com/test-owner/${name}.git`]);
   await writeFile(path.join(root,'README.md'),'# 프로젝트\n');await git(root,['add','.']);await git(root,['commit','-q','-m','init']);return root;
 }
-const request=(text,extra={})=>({mode:'subscription',workflow:'team',participants:['claude','gpt'],writer:'claude',review:true,history:[{speaker:'사용자',text}],budget:{minutes:10,maxTurns:6},...extra});
+const request=(text,extra={})=>({mode:'subscription',workflow:'team',participants:['claude','gpt'],writer:'claude',review:true,history:[{speaker:'사용자',text}],budget:{minutes:10,maxTurns:8},...extra});
 const turn=(message,status='continue',extra={})=>({session:extra.session,report:{message,status,next:extra.next||'',question:extra.question||''},usage:{inputTokens:100,cachedInputTokens:60,outputTokens:10},actions:{commands:1,edits:1,turns:3},model:'test'});
-async function run(root,req,agents){
-  const events=[],calls=[];
-  await runTeamWorkflow(req,e=>events.push(e),{syncBranch:noPush,projectRoot:root,invokeTeam:async(id,prompt,options)=>{calls.push({id,prompt,options});return agents.shift()(id,prompt,options);}});
-  return {events,calls,final:events.find(e=>e.type==='goal'&&e.final)};
+async function guide(cwd){
+  await mkdir(path.join(cwd,'docs'),{recursive:true});
+  await writeFile(path.join(cwd,projectGuidePath),'# 프로젝트 이해 가이드\n'+guideSections.map(title=>'## '+title+'\n프로젝트의 현재 구조와 실제 확인한 내용을 설명하는 시험용 가이드입니다.\n').join('\n'));
+}
+async function run(root,req,agents,{withGuide=true}={}){
+  const events=[],calls=[],plans=[];
+  await runTeamWorkflow(req,e=>events.push(e),{syncBranch:noPush,projectRoot:root,invokeTeam:async(id,prompt,options)=>{
+    if(options.readOnly){plans.push({id,prompt,options});return turn(id+' 독립 계획','continue');}
+    calls.push({id,prompt,options});if(withGuide&&calls.length===1)await guide(options.cwd);
+    return agents.shift()(id,prompt,options);
+  }});
+  return {events,calls,plans,final:events.find(e=>e.type==='goal'&&e.final)};
 }
 
 test('팀 예산과 참가자 검증은 GPT·Claude 구독 2명과 제한된 예산만 허용함',()=>{
@@ -57,8 +66,8 @@ test('두 에이전트가 전용 브랜치 작업 트리에서 교대로 작업�
   assert.equal(calls[0].options.session,undefined);assert.equal(calls[2].options.session,'claude-1');
   assert.match(calls[2].prompt.user,/테스트를 추가하고 실행했습니다/);assert.match(calls[2].prompt.user,/add\.test\.mjs/);assert.doesNotMatch(calls[2].prompt.user,/add\.mjs를 만들었습니다/);
   assert.deepEqual(calls[0].options.outputSchema,turnSchema);
-  assert.ok(events.filter(e=>e.type==='answer').every(e=>e.phase==='team'));assert.equal(events.at(-1).type,'done');
-  assert.match(await readFile(state.log,'utf8'),/Claude · 1차/);
+  assert.ok(events.filter(e=>e.type==='answer').every(e=>['team','team-plan'].includes(e.phase)));assert.equal(events.at(-1).type,'done');
+  assert.match(await readFile(state.log,'utf8'),/Claude · 3차/);
 }));
 
 test('사용자 결정이 필요하면 멈추고 다음 요청에서 같은 팀·세션으로 이어감',async()=>fixture(async dir=>{
@@ -76,14 +85,14 @@ test('비밀정보로 보이는 파일은 팀 브랜치에 커밋하지 않음',
   const root=await project(dir);
   const {events}=await run(root,request('설정 추가'),[async(id,p,o)=>{await writeFile(path.join(o.cwd,'.env'),'TOKEN=x');await writeFile(path.join(o.cwd,'app.mjs'),'//');return turn('설정을 추가했습니다');},async()=>turn('a','done'),async()=>turn('b','done')]);
   const state=JSON.parse(await readFile(path.join(root,'.ideas','team','state.json'),'utf8'));
-  assert.equal(await git(state.workspace,['ls-files']),'README.md\napp.mjs');assert.ok(events.some(e=>e.type==='notice'&&e.text.includes('.env')));
+  assert.equal(await git(state.workspace,['ls-files']),'README.md\napp.mjs\ndocs/PROJECT_GUIDE.md');assert.ok(events.some(e=>e.type==='notice'&&e.text.includes('.env')));
 }));
 
 test('실패가 이어지거나 변경 없이 대화만 반복하면 종료 사유를 남김',async()=>fixture(async dir=>{
   const root=await project(dir);
   const failing=await run(root,request('목표'),[0,1,2].map(()=>async()=>{throw new Error('네트워크 연결에 실패했습니다');}));
   assert.equal(failing.final.status,'failed');assert.equal(failing.events.filter(e=>e.type==='error').length,3);assert.deepEqual(failing.calls.map(c=>c.id),['claude','gpt','claude']);
-  const quiet=await run(root,request('목표',{newTeam:true}),[0,1,2].map(i=>async()=>turn(`의견 ${i}`)));
+  const quiet=await run(root,request('목표',{newTeam:true}),[0,1,2].map(i=>async()=>turn(`의견 ${i}`)),{withGuide:false});
   assert.equal(quiet.final.status,'stalled');
   const repo=path.join(dir,'empty');await mkdir(repo);await git(repo,['init','-q']);
   const empty=await run(repo,request('목표'),[]);assert.equal(empty.final.status,'failed');assert.match(empty.final.text,/첫 커밋/);
@@ -118,14 +127,19 @@ test('HTTP 팀 모드는 프로젝트 회의실에서만 실행하고 대화 기
   const platform=await project(home,'platform'),second=await project(home,'two');const registryFile=path.join(home,'registry.json');
   const registry=createRoomRegistry({file:registryFile,home,defaultRoom:{id:'platform',root:platform}});const room=await registry.register({name:'팀 방',root:second,repo:'https://github.com/test-owner/two'});
   let calls=0;const server=createServer({syncBranch:noPush,saveGit:noPush,env:{},projectRoot:platform,artifactDir:path.join(platform,'artifacts'),deliverableDir:path.join(platform,'deliverables'),roomRegistryFile:registryFile,roomHome:home,status:async()=>[{id:'gpt',ready:true},{id:'claude',ready:true}],
-    invokeTeam:async(id,prompt,options)=>{calls++;assert.ok(options.cwd.startsWith(second));return turn(`${id} 작업`,'done');}});
+    invokeTeam:async(id,prompt,options)=>{calls++;assert.ok(options.cwd.startsWith(second));if(!options.readOnly)await guide(options.cwd);return turn(`${id} 작업`,'done');}});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`;
   const post=(roomId,body)=>fetch(base+'/api/meeting',{method:'POST',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify({...request('팀으로 만들어줘'),roomId,...body})});
   try{
+    const runtimeConfig=await(await fetch(base+`/api/config?roomId=${room.id}`)).json();assert.equal(runtimeConfig.collaborationPolicy.version,1);assert.equal(runtimeConfig.collaborationPolicy.understandingDefault,true);
     const rejected=await post('platform');assert.equal(rejected.status,400);assert.match((await rejected.json()).error,/프로젝트 회의실/);assert.equal(calls,0);
     for(const text of ['첫 요청','두 번째 요청']){const response=await post(room.id,{history:[{speaker:'사용자',text}]});assert.equal(response.status,200);const events=(await response.text()).trim().split('\n').map(JSON.parse);assert.equal(events.find(e=>e.final).status,'complete');}
     const messages=(await (await fetch(base+`/api/session?roomId=${room.id}`)).json()).messages;
-    assert.deepEqual(messages.filter(m=>m.speaker==='사용자').map(m=>m.text),['첫 요청','두 번째 요청']);assert.equal(calls,4);
+    assert.deepEqual(messages.filter(m=>m.speaker==='사용자').map(m=>m.text),['첫 요청','두 번째 요청']);assert.equal(calls,6);
+    const exports=(await(await fetch(base+`/api/deliverables?roomId=${room.id}`)).json()).items;
+    const exportedGuide=exports.find(item=>item.summary?.startsWith('프로젝트 이해 가이드'));assert.ok(exportedGuide);
+    const download=await fetch(base+`/api/deliverables/${exportedGuide.id}/final/file?roomId=${room.id}&path=docs%2FPROJECT_GUIDE.md`);
+    assert.equal(download.status,200);assert.match(await download.text(),/구조와 데이터 흐름/);
   }finally{await new Promise(r=>server.close(r));}
 }));
 
@@ -150,8 +164,8 @@ async function researchFiles(cwd){
 }
 test('리서치는 파일 변경 없는 새 근거·반론을 3차례로 끊지 않고 최소 검토와 실제 자료 뒤 합의함',async()=>fixture(async dir=>{
   const root=await project(dir),agents=Array.from({length:7},(_,i)=>async(id,p,o)=>{if(i===3)await researchFiles(o.cwd);return researchTurn(`새 근거와 반론 ${i} 확인`,'done');});
-  const result=await run(root,request('앱을 비교하고 대상을 조사해 기획해줘',{teamFocus:'research',history:[{speaker:'GPT',text:'이전 짧은 토론의 미검증 아이디어'},{speaker:'사용자',text:'심화 조사해줘'}],budget:{minutes:10,maxTurns:8}}),agents);
-  assert.equal(result.final.status,'complete');assert.equal(result.calls.length,7);assert.equal(result.calls[0].options.outputSchema.properties.research.type,'object');assert.match(result.calls[0].prompt.system,/리서치·기획/);assert.match(result.calls[1].prompt.user,/이전 짧은 토론의 미검증 아이디어/);assert.match(result.calls[4].prompt.user,/최소6차례/);
+  const result=await run(root,request('앱을 비교하고 대상을 조사해 기획해줘',{teamFocus:'research',history:[{speaker:'GPT',text:'이전 짧은 토론의 미검증 아이디어'},{speaker:'사용자',text:'심화 조사해줘'}],budget:{minutes:10,maxTurns:10}}),agents);
+  assert.equal(result.final.status,'complete');assert.equal(result.calls.length,7);assert.equal(result.calls[0].options.outputSchema.properties.research.type,'object');assert.match(result.calls[0].prompt.system,/리서치·기획/);assert.match(result.calls[1].prompt.user,/이전 짧은 토론의 미검증 아이디어/);assert.match(result.calls[4].prompt.user,/최소8차례/);
   const state=JSON.parse(await readFile(path.join(root,'.ideas/team/state.json'),'utf8'));assert.ok(state.research.checks.gpt.proposal);assert.ok(state.research.checks.claude.proposal);
 }));
 test('단순 완료 선언 두 개로 리서치를 끝내지 않고 자료·상대 검토가 없으면 예산 종료함',async()=>fixture(async dir=>{
@@ -168,11 +182,11 @@ test('리서치 내용까지 그대로 반복하면 방향 전환을 요청한 �
   assert.equal(result.calls.length,8);assert.equal(result.final.status,'stalled');const state=JSON.parse(await readFile(path.join(root,'.ideas/team/state.json'),'utf8'));assert.match(await readFile(state.log,'utf8'),/방향을 바꾸고/);
 }));
 test('리서치 목적과 너무 짧은 예산을 요청 단계에서 검증함',()=>{
-  assert.throws(()=>validateRequest(request('x',{teamFocus:'unknown'})));assert.throws(()=>validateRequest(request('x',{teamFocus:'research',budget:{minutes:10,maxTurns:4}})),/최소6차례/);
+  assert.throws(()=>validateRequest(request('x',{teamFocus:'unknown'})));assert.throws(()=>validateRequest(request('x',{teamFocus:'research',budget:{minutes:10,maxTurns:4}})),/최소8차례/);
 });
 test('리서치 결과를 웹의 저장된 파일 결과에서 읽을 수 있도록 공유본으로 내보냄',async()=>fixture(async dir=>{
   const root=await project(dir),output=path.join(root,'outputs'),events=[];let turns=0;
-  await runTeamWorkflow(request('공유 가능한 리서치',{teamFocus:'research',budget:{minutes:10,maxTurns:8}}),e=>events.push(e),{syncBranch:noPush,projectRoot:root,deliverableDir:output,invokeTeam:async(id,p,o)=>{turns++;if(turns===1)await researchFiles(o.cwd);return researchTurn('확인 '+turns,'done');}});
+  await runTeamWorkflow(request('공유 가능한 리서치',{teamFocus:'research',budget:{minutes:10,maxTurns:10}}),e=>events.push(e),{syncBranch:noPush,projectRoot:root,deliverableDir:output,invokeTeam:async(id,p,o)=>{if(o.readOnly)return turn('독립 계획');turns++;if(turns===1){await researchFiles(o.cwd);await guide(o.cwd);}return researchTurn('확인 '+turns,'done');}});
   const saved=events.find(e=>e.type==='deliverable');assert.ok(saved);assert.equal(saved.files.length,3);const {readDeliverable}=await import('../deliverables.mjs');assert.match(await readDeliverable(output,saved.id,'final','research/proposal.md'),/기획 초안/);assert.equal(events.at(-1).type,'done');
 }));
 
@@ -181,7 +195,7 @@ test('team replies keep substantive content separate from execution notes throug
   const notes='README를 확인했고 git diff --check를 실행했습니다.';
   const answer=()=>{const r=turn(message,'done');r.report.workNotes=notes;return r;};
   const result=await run(root,request('사용자가 이해할 수 있게 제안을 설명해줘'),[async()=>answer(),async()=>answer()]);
-  const event=result.events.find(e=>e.type==='answer');assert.ok(event.text.startsWith(message));assert.equal(event.workNotes,notes);assert.ok(!event.text.includes(notes));
+  const event=result.events.find(e=>e.type==='answer'&&e.phase==='team');assert.ok(event.text.startsWith(message));assert.equal(event.workNotes,notes);assert.ok(!event.text.includes(notes));
   const {saveArtifact,readArtifact}=await import('../project-context.mjs');const output=path.join(dir,'minutes');const artifact=await saveArtifact(output,request('제안 설명'),result.events);const text=await readArtifact(output,artifact.id);assert.ok(text.includes(message));assert.ok(text.includes('작업 기록:\n'+notes));
 }));
 
@@ -195,8 +209,8 @@ test('team parser preserves a complete explanatory reply and reports the actual 
 test('selected uncommitted source content reaches both team agents through runMeeting',async()=>fixture(async dir=>{
   const root=await project(dir),seen=[];const {runMeeting}=await import('../room.mjs');
   await writeFile(path.join(root,'customer-notes.md'),'비회원 70%, 문자 인증 실패 82건.');
-  await runMeeting(request('자료에 근거해 개선안을 설명해줘',{files:['customer-notes.md']}),()=>{},{projectRoot:root,context:'자료 파일: customer-notes.md\n<자료>비회원 70%, 문자 인증 실패 82건.</자료>',syncBranch:noPush,invokeTeam:async(id,p,o)=>{seen.push(p.user);await assert.rejects(access(path.join(o.cwd,'customer-notes.md')));return turn('문자 인증 실패 복구를 우선 검토합니다','done');}});
-  assert.equal(seen.length,2);for(const prompt of seen){assert.match(prompt,/비회원 70%, 문자 인증 실패 82건/);assert.match(prompt,/읽기 전용 사본/);}
+  await runMeeting(request('자료에 근거해 개선안을 설명해줘',{files:['customer-notes.md']}),()=>{},{projectRoot:root,context:'자료 파일: customer-notes.md\n<자료>비회원 70%, 문자 인증 실패 82건.</자료>',syncBranch:noPush,invokeTeam:async(id,p,o)=>{seen.push(p.user);await assert.rejects(access(path.join(o.cwd,'customer-notes.md')));if(!o.readOnly)await guide(o.cwd);return turn('문자 인증 실패 복구를 우선 검토합니다','done');}});
+  assert.equal(seen.length,4);for(const prompt of seen){assert.match(prompt,/비회원 70%, 문자 인증 실패 82건/);assert.match(prompt,/읽기 전용 사본|선택한 참고 자료/);}
 }));
 
 test('quality profile pins model and reasoning independently of the ignored app config',async()=>{

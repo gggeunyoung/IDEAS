@@ -51,14 +51,14 @@ test('원격에 다른 변경이 있으면 강제 푸시·자동 병합 없이 �
 }));
 test('실패한 AI 차례의 파일도 최종 체크포인트로 실제 원격에 보존한다',async()=>fixture(async dir=>{
   const {root,remote,sync}=await setup(dir),events=[];
-  await runTeamWorkflow({mode:'subscription',workflow:'team',participants:['gpt','claude'],writer:'gpt',review:true,history:[{speaker:'사용자',text:'파일 작업'}],budget:{minutes:10,maxTurns:3}},e=>events.push(e),{projectRoot:root,syncBranch:sync,invokeTeam:async(id,p,o)=>{await writeFile(path.join(o.cwd,'partial.md'),'미완료 작업');throw new Error('시험용 중단');}});
+  await runTeamWorkflow({mode:'subscription',workflow:'team',participants:['gpt','claude'],writer:'gpt',review:true,history:[{speaker:'사용자',text:'파일 작업'}],budget:{minutes:10,maxTurns:5}},e=>events.push(e),{projectRoot:root,syncBranch:sync,invokeTeam:async(id,p,o)=>{if(o.readOnly)return {report:{message:'독립 계획',status:'continue'},usage:{},actions:{}};await writeFile(path.join(o.cwd,'partial.md'),'미완료 작업');throw new Error('시험용 중단');}});
   const state=JSON.parse(await readFile(path.join(root,'.ideas/team/state.json'),'utf8'));
   assert.equal(events.find(e=>e.final).status,'failed');assert.ok(events.some(e=>e.type==='git'&&e.status==='pushed'));
   assert.equal(await git(remote,['show',state.branch+':partial.md']),'미완료 작업');assert.equal(await git(root,['status','--porcelain']),'');
 }));
 test('차례별 푸시 실패는 표시하고 종료 시 다시 푸시해 원격에서 확인한다',async()=>fixture(async dir=>{
   const {root,remote,sync}=await setup(dir),events=[];let attempts=0;
-  await runTeamWorkflow({mode:'subscription',workflow:'team',participants:['gpt','claude'],writer:'gpt',review:true,history:[{speaker:'사용자',text:'작은 결과'}],budget:{minutes:10,maxTurns:2}},e=>events.push(e),{projectRoot:root,syncBranch:async cwd=>{attempts++;if(attempts<3)throw new Error('시험용 연결 실패');return sync(cwd);},invokeTeam:async(id,p,o)=>{await writeFile(path.join(o.cwd,'answer.md'),'결과');return {session:'test',report:{message:'직접 확인',status:'done',next:'',question:''},usage:{},actions:{},model:'test'};}});
+  await runTeamWorkflow({mode:'subscription',workflow:'team',participants:['gpt','claude'],writer:'gpt',review:true,history:[{speaker:'사용자',text:'작은 결과'}],budget:{minutes:10,maxTurns:4}},e=>events.push(e),{projectRoot:root,syncBranch:async cwd=>{attempts++;if(attempts<3)throw new Error('시험용 연결 실패');return sync(cwd);},invokeTeam:async(id,p,o)=>{if(o.readOnly)return {report:{message:'독립 계획',status:'continue'},usage:{},actions:{}};const {guideSections}=await import('../collaboration-policy.mjs');await mkdir(path.join(o.cwd,'docs'),{recursive:true});await writeFile(path.join(o.cwd,'docs/PROJECT_GUIDE.md'),guideSections.map(x=>'## '+x+'\n현재 구성요소와 확인한 내용, 남은 한계를 설명하는 테스트용 가이드입니다.').join('\n'));await writeFile(path.join(o.cwd,'answer.md'),'결과');return {session:'test',report:{message:'직접 확인',status:'done',next:'',question:''},usage:{},actions:{},model:'test'};}});
   assert.equal(attempts,3);assert.equal(events.filter(e=>e.type==='git'&&e.status==='failed').length,2);assert.equal(events.find(e=>e.final).status,'complete');
   const state=JSON.parse(await readFile(path.join(root,'.ideas/team/state.json'),'utf8'));assert.equal(state.gitSync.status,'pushed');assert.equal(await git(remote,['show',state.branch+':answer.md']),'결과');
 }));

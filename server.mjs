@@ -12,6 +12,7 @@ import {createRoomRegistry,gitState,loadSession,saveSession,githubAccount} from 
 import {saveRoomGit,readProjectSync} from './room-git.mjs';
 import {goalBudget} from './goal-workflow.mjs';
 import {teamBudget} from './team-workflow.mjs';
+import {collaborationPolicyInfo} from './collaboration-policy.mjs';
 const appRoot=path.dirname(fileURLToPath(import.meta.url));
 export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,syncBranch,saveGit=saveRoomGit,status=localStatus,github=githubAccount,projectRoot=env.IDEAS_PROJECT_ROOT||appRoot,artifactDir=path.join(appRoot,'artifacts'),deliverableDir=path.join(appRoot,'deliverables'),roomRegistryFile=path.join(projectRoot,'.runtime','rooms.json'),roomHome}={}){
   let busy=false;
@@ -40,7 +41,7 @@ export function createServer({env=process.env,invoke,invokeLocal,invokeTeam,sync
     if(req.method==='GET'){
       try{
         const room=await registry.resolve(url.searchParams.get('roomId'));const dirs=await storage(room);
-        if(route==='/api/config')return send(200,{participants:publicConfig(env),local:await status({env}),projectName:room.name,room,pcWork:pcCapabilities(room.root),gitSync:room.kind==='project'?await readProjectSync(room.root):{},pricingDate:'2026-10-11'});
+        if(route==='/api/config')return send(200,{participants:publicConfig(env),local:await status({env}),projectName:room.name,room,pcWork:pcCapabilities(room.root),collaborationPolicy:collaborationPolicyInfo,gitSync:room.kind==='project'?await readProjectSync(room.root):{},pricingDate:'2026-10-11'});
         if(route==='/api/files')return send(200,{files:await projectFiles(room.root)});
         if(route==='/api/session')return send(200,{messages:await loadSession(room.root)});
         if(route==='/api/deliverables')return send(200,{items:await listDeliverables(dirs.deliverableDir)});
