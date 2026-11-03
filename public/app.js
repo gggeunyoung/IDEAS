@@ -224,13 +224,13 @@ $('composer').addEventListener('submit',async event=>{
   try{
     const request={roomId:currentRoom,history,participants:ids,mode,review:$('review').checked,workflow,writer:$('writer').value,files,webSearch:mode==='subscription'&&$('web-search').checked,...(workflow==='goal'?{budget:{minutes:Number($('goal-minutes').value),maxCalls:Number($('goal-calls').value)}}:{}),...(workflow==='team'?{execution:$('team-execution').value,teamFocus:$('team-focus').value,budget:{minutes:Number($('team-minutes').value),maxTurns:Number($('team-turns').value)},newTeam:$('team-new').checked}:{})};
     if(!localServer){
-      messages.push({speaker:'사용자',text,mode,workflow});save();render();$('message').value='';$('status').textContent=workflow==='team'?`맥에서 팀 작업 시작 · 최대 ${request.budget.minutes}분 / ${request.budget.maxTurns}차례. 웹을 닫아도 맥에서 진행하며 나중에 다시 조회할 수 있습니다.`:workflow==='goal'?`맥에서 목표 실행 시작 · 최대 ${request.budget.minutes}분 / ${request.budget.maxCalls}회. 웹을 닫아도 맥에서 진행하며 나중에 다시 조회할 수 있습니다.`:'맥에서 회의를 시작합니다. 토론은 보통 1~5분, 파일 협업은 최대 10분 걸릴 수 있습니다.';
+      messages.push({speaker:'사용자',text,mode,workflow});save();render();$('message').value='';setComposerOpen(false);$('status').textContent=workflow==='team'?`맥에서 팀 작업 시작 · 최대 ${request.budget.minutes}분 / ${request.budget.maxTurns}차례. 웹을 닫아도 맥에서 진행하며 나중에 다시 조회할 수 있습니다.`:workflow==='goal'?`맥에서 목표 실행 시작 · 최대 ${request.budget.minutes}분 / ${request.budget.maxCalls}회. 웹을 닫아도 맥에서 진행하며 나중에 다시 조회할 수 있습니다.`:'맥에서 회의를 시작합니다. 토론은 보통 1~5분, 파일 협업은 최대 10분 걸릴 수 있습니다.';
       await submitRemoteJob('meeting',request,job=>{for(const e of job.events){if(e.type==='error')failures++;if(e.type==='notice')lastNotice=e.text;onEvent(e,mode,workflow,true);}save();render();});
       if(failures||lastNotice)$('status').textContent=`회의 종료${failures?` · 실패한 응답 ${failures}개`:''}${lastNotice?` · ${lastNotice}`:''}`;return;
     }
     const response=await api('/api/meeting',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request),signal:controller.signal});
     if(!response.ok){const data=await response.json();throw new Error(data.error);}
-    messages.push({speaker:'사용자',text,mode,workflow});save();render();$('message').value='';
+    messages.push({speaker:'사용자',text,mode,workflow});save();render();$('message').value='';setComposerOpen(false);
     const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',doneEvent=false;
     while(true){const {done,value}=await reader.read();buffer+=decoder.decode(value||new Uint8Array(),{stream:!done});let index;while((index=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,index);buffer=buffer.slice(index+1);if(line){const e=JSON.parse(line);if(e.type==='done')doneEvent=true;if(e.type==='error')failures++;if(e.type==='notice')lastNotice=e.text;onEvent(e,mode,workflow);}}if(done)break;}
     if(!doneEvent)throw new Error('회의가 완료되지 않았습니다. 응답이 남아 있으면 회의록을 내보내세요.');
@@ -245,7 +245,7 @@ $('team-focus').onchange=updateWriter;
 $('workflow').onchange=()=>{if(['files','goal'].includes($('workflow').value))$('review').checked=true;updateWriter();};
 for(const id of ['mode','workflow','writer','review','web-search','team-focus','team-execution'])$(id).addEventListener('change',savePreferences);
 $('mode').onchange=()=>{if(config)showParticipants();$('status').textContent=$('mode').value==='subscription'?'기존 계정으로 로그인한 CLI를 사용합니다. API 키를 사용하지 않습니다.':$('mode').value==='demo'?'무료 데모 · 실제 AI 답변을 생성하지 않습니다.':'API 모드 · 대화와 선택한 자료를 전송하고 별도 과금합니다.';};
-$('example').onclick=()=>{$('message').value='나와 AI 동료들이 일주일 동안 함께 시도할 생산적인 실험 3개를 제안해줘. 하루에 30분만 쓸 수 있어.';$('message').focus();};
+$('example').onclick=()=>{$('message').value='나와 AI 동료들이 일주일 동안 함께 시도할 생산적인 실험 3개를 제안해줘. 하루에 30분만 쓸 수 있어.';setComposerOpen(true);};
 $('clear').onclick=async()=>{if(messages.length&&!confirm('현재 대화를 새로 시작할까요? 이미 저장한 회의록과 결과 파일은 남습니다.'))return;try{const response=await api('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reset:true})});if(!response.ok)throw new Error((await response.json()).error);messages=[];executionProgress=null;renderProgress();save();render();$('artifact').hidden=true;localStorage.removeItem('ideas-artifact:'+currentRoom);$('status').textContent='새 대화를 시작하세요.';}catch(error){$('status').textContent=error.message;}};
 $('export').onclick=()=>{const markdown='# IDEAS 공동 회의록\n\n'+messages.map(m=>`## ${m.speaker} · ${m.mode==='demo'?'데모':m.speaker==='사용자'?'사용자':stage(m)}${m.error?' · 오류':''}\n\n${m.text}\n${m.model?'\n모델: '+m.model:''}`).join('\n\n');const url=URL.createObjectURL(new Blob([markdown],{type:'text/markdown;charset=utf-8'}));const link=document.createElement('a');link.href=url;link.download='ideas-meeting.md';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
 const localServer=['127.0.0.1','localhost','::1','[::1]'].includes(location.hostname)&&!document.querySelector('meta[name="ideas-hosting"][content="static"]');
@@ -259,7 +259,7 @@ async function loadRooms(){
   $('dashboard-status').textContent=`연결된 회의실 ${rooms.length}개 · 방마다 자료·대화·결과가 분리됩니다.`;$('worker-state').textContent=localServer?'로컬 맥 워커 연결됨':'원격 맥 워커 연결됨';
 }
 async function openRoom(id,{autoResume=true,allowRunning=false}={}){
-  if(running&&!allowRunning)return;executionProgress=null;renderProgress();currentRoom=id;config=null;$('dashboard').hidden=true;$('room-view').hidden=false;$('artifact').hidden=true;$('message').value='';location.hash='room='+id;
+  if(running&&!allowRunning)return;executionProgress=null;renderProgress();currentRoom=id;config=null;$('dashboard').hidden=true;$('room-view').hidden=false;$('artifact').hidden=true;$('message').value='';setComposerOpen(false,{restoreFocus:false});location.hash='room='+id;
   messages=[];render();$('participants').replaceChildren();$('files').replaceChildren();$('deliverables').replaceChildren();$('status').textContent='이 회의실의 대화와 자료를 읽고 있습니다.';
   const room=rooms.find(r=>r.id===id);if(room.kind==='project'&&preferences.workflowVersion!==2){$('workflow').value='team';$('team-focus').value='research';$('web-search').checked=true;}else if(room.kind!=='project'&&$('workflow').value==='team')$('workflow').value='discuss';$('room-title').textContent=room.name;$('active-room-name').textContent=room.name;$('active-room-path').textContent=room.root;$('git-state').textContent=room.git.branch?`${room.git.branch} · 변경 ${room.git.changes}개`:'Git 상태 확인 필요';
   try{const response=await api('/api/session');if(!response.ok)throw new Error();const data=await response.json();if(currentRoom!==id)return;messages=data.messages;if(!messages.length){const key=id==='platform'?'ideas-room':'ideas-room:'+id;try{messages=JSON.parse(localStorage.getItem(key)||'[]');}catch{messages=[];}}}catch{if(currentRoom!==id)return;messages=[];$('status').textContent='저장된 대화를 읽지 못했습니다.';}
@@ -359,7 +359,24 @@ $('toggle-progress').onclick=()=>{const open=$('progress-detail').hidden;$('prog
 function jumpLatest(){unreadReplies=0;$('new-replies').hidden=true;const log=$('log'),target=[...log.querySelectorAll('.bubble[data-speaker]')].findLast(e=>e.dataset.speaker!=='사용자');log.scrollTo({top:target?target.getBoundingClientRect().top-log.getBoundingClientRect().top+log.scrollTop-20:log.scrollHeight,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});}
 $('jump-latest').onclick=jumpLatest;$('new-replies').onclick=jumpLatest;$('jump-start').onclick=()=>$('log').scrollTo({top:0,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
 $('log').addEventListener('scroll',()=>{if($('log').scrollHeight-$('log').clientHeight-$('log').scrollTop<100){unreadReplies=0;$('new-replies').hidden=true;}},{passive:true});
-$('message').addEventListener('input',()=>{$('message').style.height='auto';$('message').style.height=Math.min(135,$('message').scrollHeight)+'px';});
+function resizeMessage(){
+  $('message').style.height='auto';$('message').style.height=Math.min(180,$('message').scrollHeight)+'px';
+}
+function updateComposerButton(){
+  $('open-composer').textContent=$('message').value.trim()?'작성 중인 의견 열기':'의견 쓰기';
+}
+function setComposerOpen(open,{restoreFocus=true}={}){
+  const log=$('log'),top=log.scrollTop,wasOpen=!$('composer-panel').hidden;
+  $('composer-panel').hidden=!open;$('open-composer').hidden=open;$('open-composer').setAttribute('aria-expanded',String(open));
+  updateComposerButton();
+  if(open){resizeMessage();$('message').focus({preventScroll:true});}
+  else if(wasOpen&&restoreFocus&&$('composer-panel').contains(document.activeElement))$('open-composer').focus({preventScroll:true});
+  log.scrollTop=top;
+}
+$('open-composer').onclick=()=>setComposerOpen(true);
+$('close-composer').onclick=()=>setComposerOpen(false);
+$('composer-panel').addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();setComposerOpen(false);}});
+$('message').addEventListener('input',()=>{resizeMessage();updateComposerButton();});
 $('message').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)&&!running){e.preventDefault();$('composer').requestSubmit();}});
 const workspaceResize=new ResizeObserver(entries=>{for(const entry of entries)document.documentElement.style.setProperty(entry.target.classList.contains('appbar')?'--appbar-height':'--composer-height',entry.target.getBoundingClientRect().height+'px');});workspaceResize.observe(document.querySelector('.appbar'));workspaceResize.observe(document.querySelector('footer'));
 try{await initializeRooms();}catch(error){if(!localServer){showLogin();$('login-status').textContent=error.message;}else{$('dashboard-status').textContent=error.message;$('worker-state').textContent='연결 확인 필요';}}

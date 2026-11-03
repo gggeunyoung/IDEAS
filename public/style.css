@@ -81,3 +81,40 @@ footer{padding:8px 14px 10px}textarea{font-size:16px;min-height:40px}.send-row s
 .new-replies{bottom:calc(var(--composer-height,137px) + 12px)}.body pre code{padding:0;background:none;font:inherit}
 #composer{display:flex;align-items:flex-end;gap:12px}#composer textarea{flex:1;min-width:0;width:auto}#composer .send-row{flex-shrink:0;padding-bottom:3px}#composer:not([data-mode=live]) #cost{display:none}
 @media(max-width:700px){#composer{gap:8px}#composer:focus-within{flex-wrap:wrap}#composer:focus-within textarea{flex-basis:100%}#composer:focus-within .send-row{margin-left:auto}}
+
+/* Reading is the default; composing takes space only after an explicit click. */
+.room-header{padding-top:12px;padding-bottom:10px}
+.conversation-nav{padding-bottom:8px}
+#conversation-footer{padding-top:8px;padding-bottom:8px}
+.composer-toolbar{display:flex;align-items:center;gap:10px;min-height:36px}
+.composer-toolbar #status{flex:1;min-width:0;margin:0;font-size:11px;line-height:1.5;max-height:3em;overflow:auto;overflow-wrap:anywhere}
+.composer-toolbar button{flex-shrink:0;padding:8px 14px;font-size:12px}
+#open-composer{background:transparent;border:1px solid #c6d0c3;color:#315d44}
+#composer-panel{padding-top:10px;max-height:min(40dvh,300px);overflow-y:auto}
+.composer-heading{display:flex;align-items:center;gap:12px;padding:0 2px 8px;font-size:12px;color:#526655}
+.composer-heading label{font-weight:650}
+#composer-hint{margin-left:auto;font-size:11px;color:#7a8379}
+#close-composer{font-size:12px;padding:4px}
+#composer{display:flex;flex-direction:column;align-items:stretch;gap:8px;box-shadow:none}
+#composer textarea{width:100%;flex:auto;min-height:78px;max-height:180px;overflow-y:auto}
+#composer .send-row{justify-content:flex-end;padding-bottom:0}
+#composer:focus-within{flex-wrap:nowrap}
+#log{padding-top:22px;padding-bottom:24px;overflow-anchor:none}
+.bubble{max-width:860px;padding:26px 30px}
+.body{line-height:1.9}
+@media(max-width:700px){
+  .room-header{padding-top:10px;padding-bottom:8px;flex-wrap:wrap}
+  .room-heading{flex:1;min-width:160px}
+  .room-heading p{display:none}
+  #conversation-footer{padding:6px 12px max(6px,env(safe-area-inset-bottom))}
+  .composer-toolbar{min-height:36px;gap:8px}
+  .composer-toolbar #status{font-size:10px}
+  .composer-toolbar button{padding:8px 10px;font-size:11px}
+  #composer-panel{max-height:45dvh;padding-top:8px}
+  #composer-hint{display:none}
+  #close-composer{margin-left:auto}
+  #composer:focus-within textarea{flex-basis:auto}
+  #composer:focus-within .send-row{margin-left:0}
+  #log{padding:16px 10px 20px}
+  .bubble{padding:22px 20px}
+}
