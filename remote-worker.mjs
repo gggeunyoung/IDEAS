@@ -1,3 +1,4 @@
+import {createPersistentSessions} from './persistent-sessions.mjs';
 import http from 'node:http';
 import {randomBytes,randomUUID,scryptSync,timingSafeEqual,createHash} from 'node:crypto';
 import {mkdir,readFile,writeFile,rename,readdir} from 'node:fs/promises';
@@ -21,12 +22,13 @@ export async function prepareRemoteSecrets(directory=path.join(root,'.runtime'))
   return secrets;
 }
 async function readJsonBody(req){const chunks=[];let length=0;for await(const chunk of req){const bytes=Buffer.from(chunk);length+=bytes.length;if(length>150000)throw new Error('요청이 너무 큽니다.');chunks.push(bytes);}const body=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks));return JSON.parse(body||'{}');}
-export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:3030',directory=path.join(root,'.runtime','remote-jobs'),fetchImpl=fetch,persistJob,googleSettings={},verifyGoogleToken}={}){
+export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:3030',directory=path.join(root,'.runtime','remote-jobs'),fetchImpl=fetch,persistJob,googleSettings={},verifyGoogleToken,now=Date.now}={}){
   if(!secrets?.bridgeToken||!secrets?.passwordHash||!secrets?.salt)throw new Error('원격 인증 설정이 필요합니다.');
   const local=new URL(localUrl);if(local.protocol!=='http:'||local.hostname!=='127.0.0.1'||local.pathname!=='/')throw new Error('로컬 서버 주소가 올바르지 않습니다.');
   const google=createGoogleLogin({...googleSettings,verifyToken:verifyGoogleToken});
   const instanceId=randomUUID();
-  const sessions=new Map(),jobs=new Map(),controllers=new Map();let active=null,loginAttempts=[];
+  const sessions=await createPersistentSessions({file:path.join(directory,'..','remote-sessions.json'),now,context:hash(JSON.stringify({salt:secrets.salt,passwordHash:secrets.passwordHash,bridgeToken:secrets.bridgeToken,clientId:googleSettings.clientId,allowedEmail:googleSettings.allowedEmail,allowedSub:googleSettings.allowedSub})).toString('hex')});
+  const jobs=new Map(),controllers=new Map();let active=null,loginAttempts=[];
   await mkdir(directory,{recursive:true,mode:0o700});
   const store=persistJob||async function(job){const file=path.join(directory,job.id+'.json'),temp=file+'.'+randomUUID();await writeFile(temp,JSON.stringify(job),{mode:0o600});await rename(temp,file);};
   let recoveryWarnings=0;
@@ -36,7 +38,6 @@ export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:303
     if(['queued','running'].includes(job.status)){job.status='interrupted';job.error='맥 워커가 재시작되어 작업이 중단됐습니다. 저장된 대화와 결과를 확인하세요.';await store(job);}jobs.set(job.id,job);
   }
   const cookieToken=req=>/\b__Host-ideas_session=([A-Za-z0-9_-]{43})(?:;|$)/.exec(req.headers.cookie||'')?.[1];
-  const authenticated=req=>{const token=cookieToken(req),key=token?hash(token).toString('hex'):null;const expires=key&&sessions.get(key);if(!expires||expires<Date.now()){if(key)sessions.delete(key);return false;}return true;};
   const localFetch=(route,options={})=>fetchImpl(new URL(route,local),{...options,redirect:'error',headers:{...options.headers,Origin:local.origin,'Content-Type':'application/json'}});
   async function execute(job){
     const control=controllers.get(job.id)||new AbortController();controllers.set(job.id,control);
@@ -63,21 +64,22 @@ export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:303
       if(req.method==='POST'&&!req.headers['content-type']?.startsWith('application/json'))return send(415,{error:'JSON 요청이 필요합니다.'});
       if(req.method==='GET'&&route==='/api/auth/config'){try{const config=google.challenge();return send(200,config.body,config.cookie?{'Set-Cookie':config.cookie}:{});}catch(error){return send(error.status||503,{error:error.message});}}
       if(req.method==='POST'&&['/api/auth/login','/api/auth/google'].includes(route)){
-        const now=Date.now();loginAttempts=loginAttempts.filter(time=>time>now-60000);if(loginAttempts.length>=10)return send(429,{error:'로그인 시도가 많습니다. 1분 뒤 다시 시도하세요.'});loginAttempts.push(now);
+        const time=now();loginAttempts=loginAttempts.filter(previous=>previous>time-60000);if(loginAttempts.length>=10)return send(429,{error:'로그인 시도가 많습니다. 1분 뒤 다시 시도하세요.'});loginAttempts.push(time);
         const data=await readJsonBody(req);
         if(route==='/api/auth/google'){try{await google.authenticate(data.credential,req.headers.cookie);}catch(error){return send(error.status||401,{error:error.message});}}
         else if(typeof data.password!=='string'||data.password.length>128||!equal(scryptSync(data.password,secrets.salt,32).toString('hex'),secrets.passwordHash))return send(401,{error:'비밀번호가 맞지 않습니다.'});
-        for(const [key,expires] of sessions)if(expires<now)sessions.delete(key);if(sessions.size>=30)return send(429,{error:'로그인 세션이 너무 많습니다.'});
-        const token=randomBytes(32).toString('base64url');sessions.set(hash(token).toString('hex'),now+8*3600000);
-        return send(200,{authenticated:true},{'Set-Cookie':`__Host-ideas_session=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=28800`});
+        const token=await sessions.create();
+        return send(200,{authenticated:true},{'Set-Cookie':sessions.cookie(token)});
       }
-      if(!authenticated(req))return send(401,{error:'회의실에 로그인하세요.'});
+      const token=cookieToken(req),session=await sessions.authenticate(token);
+      if(!session.valid)return send(401,{error:'회의실에 로그인하세요.'});
+      if(session.renew)res.setHeader('Set-Cookie',sessions.cookie(token));
       if(req.method==='GET'&&route==='/api/auth/status'){
         const roomId=url.searchParams.get('roomId');
         const latest=roomId?[...jobs.values()].filter(j=>j.type==='meeting'&&(j.request.roomId||'platform')===roomId).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''))[0]:null;
         return send(200,{authenticated:true,worker:'online',recoveryWarnings,activeJob:active?{id:active,type:jobs.get(active).type,roomId:jobs.get(active).request.roomId||'platform'}:null,latestMeeting:latest?{id:latest.id,status:latest.status}:null});
       }
-      if(req.method==='POST'&&route==='/api/auth/logout'){const token=cookieToken(req);if(token)sessions.delete(hash(token).toString('hex'));return send(200,{authenticated:false},{'Set-Cookie':'__Host-ideas_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0'});}
+      if(req.method==='POST'&&route==='/api/auth/logout'){await sessions.revoke(token);return send(200,{authenticated:false},{'Set-Cookie':'__Host-ideas_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0'});}
       const match=/^\/api\/jobs\/([0-9a-f-]{36})(\/cancel)?$/.exec(route);
       if(match){const job=jobs.get(match[1]);if(!job)return send(404,{error:'작업을 찾을 수 없습니다.'});if(req.method==='POST'&&match[2]){if(job.type!=='meeting')return send(409,{error:'Git 저장과 저장소 연결은 중단할 수 없습니다.'});if(!['queued','running'].includes(job.status))return send(200,{cancelled:false,status:job.status});controllers.get(job.id)?.abort();return send(200,{cancelled:true});}if(req.method==='GET'&&!match[2]){const cursor=Number(url.searchParams.get('after')||0);if(!Number.isInteger(cursor)||cursor<0)return send(400,{error:'작업 위치가 올바르지 않습니다.'});return send(200,{id:job.id,type:job.type,roomId:job.request.roomId||'platform',status:job.status,createdAt:job.createdAt,finishedAt:job.finishedAt,checkedAt:new Date().toISOString(),events:job.events.slice(cursor),cursor:job.events.length,result:job.result,error:job.error,...(cursor===0&&job.type==='meeting'?{history:job.request.history,mode:job.request.mode,workflow:job.request.workflow}:{})});}return send(405,{error:'허용되지 않은 요청입니다.'});}
       if(req.method==='POST'&&route==='/api/jobs'){
@@ -94,7 +96,7 @@ export async function createRemoteWorker({secrets,localUrl='http://127.0.0.1:303
       const body=reset?await readJsonBody(req):null;if(reset&&body.reset!==true)return send(400,{error:'새 대화 요청이 필요합니다.'});
       const response=await localFetch(route+url.search,{method:req.method,body:reset?JSON.stringify(body):undefined,signal:AbortSignal.timeout(20000)});
       const headers={'Content-Type':response.headers.get('content-type')||'application/json','Cache-Control':'no-store'};if(response.headers.has('content-disposition'))headers['Content-Disposition']=response.headers.get('content-disposition');res.writeHead(response.status,headers);res.end(Buffer.from(await response.arrayBuffer()));
-    }catch{send(502,{error:'맥 서버와 연결되지 않았습니다. 맥의 서버·인터넷·잠자기 상태를 확인하세요.'});}
+    }catch(error){send(error.status===429?429:502,{error:error.status===429?error.message:'맥 서버와 연결되지 않았습니다. 맥의 서버·인터넷·잠자기 상태를 확인하세요.'});}
   });
   server.requestTimeout=30000;server.on('close',()=>{for(const controller of controllers.values())controller.abort();});return server;
 }

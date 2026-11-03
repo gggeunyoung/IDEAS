@@ -1,3 +1,10 @@
+# 최신 변경 — 2026-11-03
+
+- Wiki Radar(위키레이더) 연결 실패는 기존 저장소 클론 요청의 wiki_radar 주소가 현재 GitHub 인증에서404인 것이 원인이었다. 사용자 요청대로 gggeunyoung/wiki_radar 비공개 저장소를 실제 생성하고 /Users/kimgeunyoung/wiki_radar에 클론·등록했다. 방 ID6979778b9aa55fd3, 초기 README 커밋f3e5d69.
+- 새 회의실 폼을 다시 열면 새 프로젝트 모드/입력을 초기화한다. 신규 저장소를 기존 연결로 요청했을 때의 오류에 생성 방식 안내를 추가했다.
+- 로그인은 persistent-sessions.mjs의 해시 기반 로컬 영구 세션으로 변경했다. 유효기간30일, 활성 사용 시 하루 한 번 연장. HttpOnly/Secure/SameSite=Strict 유지. Google 토큰 원문은 저장하지 않는다. 워커 재시작 유지, 로그아웃 영구 취소, 비밀번호·Google 허용계정/클라이언트 설정 변경 시 기존 세션 무효화. .runtime/remote-sessions.json은 Git 제외/권한600.
+- 이번 구버전에서 최초 전환 시 한 번 재로그인 필요. 이후에는 사용을 이어가는 동안 유지된다. 쿠키 삭제/명시적 로그아웃/30일 미사용은 재로그인이 필요하다.
+
 # 최신 변경 — 2026-10-28
 
 - Hobby 팀 정지 화면과 Blob Simple Operations 11,392/10,000 초과를 확인했다. 모델 추론 비용과 별개의 중계 저장소 읽기다.

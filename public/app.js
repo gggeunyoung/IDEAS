@@ -314,7 +314,7 @@ const repoSlug=value=>value.toLowerCase().trim().replace(/[^a-z0-9._-]+/g,'-').r
 function roomMode(){
   const create=$('room-mode').value==='create';$('room-repo-name-field').hidden=!create;$('room-repo-field').hidden=create;$('room-repo-name').required=create;$('room-repo').required=!create;
   $('connect-room').textContent=create?'만들고 연결':'클론하고 연결';$('room-account').hidden=!create;$('connect-room').disabled=create&&github?.ready===false;
-  $('room-hint').textContent=create?'로그인한 GitHub 계정에 README가 있는 비공개 저장소를 새로 만들고, 작업 컴퓨터의 홈 폴더로 받아 회의실로 연결합니다.':'README가 있는 기존 저장소를 작업 컴퓨터로 받아 연결합니다. 기존 폴더는 덮어쓰지 않습니다.';
+  $('room-hint').textContent=create?'회의실 이름과 저장소 이름을 정하면 GitHub 비공개 저장소 생성 → 맥 홈 폴더에 클론 → 회의실 등록을 한 번에 진행합니다. GitHub에서 미리 만들 필요 없습니다.':'README가 있는 기존 저장소를 작업 컴퓨터로 받아 연결합니다. 기존 폴더는 덮어쓰지 않습니다.';
 }
 $('room-mode').onchange=roomMode;roomMode();
 // A Korean-only room name has no English slug, so a dated name is suggested instead of an empty required field.
@@ -327,7 +327,7 @@ async function checkGithub(){
   catch{github={ready:false,error:'회의실 서버에 연결하지 못했습니다. 서버가 켜져 있는지 확인하세요.'};}
   $('room-account').textContent=github.ready?`GitHub 계정 ${github.account}에 비공개 저장소로 만들어집니다.`:github.error;roomMode();
 }
-$('new-room').onclick=()=>{$('room-form').hidden=false;$('room-status').textContent='';$('room-name').focus();checkGithub();};$('cancel-room').onclick=()=>{$('room-form').hidden=true;};
+$('new-room').onclick=()=>{if($('room-form').hidden){$('room-form').reset();repoNameEdited=false;}$('room-mode').value='create';roomMode();$('room-form').hidden=false;$('room-status').textContent='';$('room-name').focus();checkGithub();};$('cancel-room').onclick=()=>{$('room-form').hidden=true;};
 $('room-form').onsubmit=async event=>{event.preventDefault();if(running)return;
   // The form skips the browser's silent tooltips; every problem is written under the button instead.
   const invalid=[...$('room-form').querySelectorAll('input')].find(input=>!input.closest('[hidden]')&&!input.checkValidity());

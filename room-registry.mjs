@@ -94,7 +94,7 @@ export function createRoomRegistry({file,defaultRoom,home=homedir(),createRepo=c
       try{
         const parsed=repositoryUrl(repo),root=path.join(home,parsed.folder);let exists=false;
         try{await lstat(root);exists=true;}catch(e){if(e.code!=='ENOENT')throw e;}
-        if(!exists){try{await cloneRepo(parsed.url,root);}catch{throw new Error('클론에 실패했습니다. 저장소 접근 권한을 확인하세요. 기존 폴더는 덮어쓰지 않습니다.');}}
+        if(!exists){try{await cloneRepo(parsed.url,root);}catch{throw new Error('클론에 실패했습니다. GitHub 저장소가 없거나 현재 계정에 접근 권한이 없습니다. 아직 만들지 않은 저장소라면 ‘새 프로젝트 · 내 GitHub에 비공개 저장소 만들기’를 선택하세요. 기존 폴더는 덮어쓰지 않습니다.');}}
         return await register({name,root,repo:parsed.url});
       }finally{locked=false;}
     },

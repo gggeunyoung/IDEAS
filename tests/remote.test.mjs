@@ -33,7 +33,7 @@ test('remote worker rejects public, forged, logged-out access and arbitrary rout
   assert.equal((await f.request('/api/rooms',{cookie})).status,200);assert.equal(calls,1);
   assert.equal((await f.request('/.env',{cookie})).status,404);assert.equal((await f.request('/api/config',{cookie:'__Host-ideas_session='+'a'.repeat(43)})).status,401);
   assert.equal((await f.request('/api/auth/logout',{cookie,body:{}})).status,200);assert.equal((await f.request('/api/rooms',{cookie})).status,401);
-  const another=await f.login();await f.restart();assert.equal((await f.request('/api/rooms',{cookie:another})).status,401);
+  const another=await f.login();await f.restart();assert.equal((await f.request('/api/rooms',{cookie:another})).status,200);
 });
 test('remote login is throttled before brute-force requests reach the local server',async t=>{
   const f=await workerFixture(t,()=>assert.fail('로그인 요청은 로컬 서버에 전달하지 않는다'));
@@ -122,6 +122,7 @@ test('Google login uses the existing protected worker session and keeps password
   assert.equal((await f.request('/api/auth/google',{body:{credential:'token'}})).status,401);
   const loggedIn=await f.request('/api/auth/google',{cookie:challengeCookie,body:{credential:'token'}});assert.equal(loggedIn.status,200);const cookie=loggedIn.headers.get('set-cookie').split(';')[0];
   assert.equal((await f.request('/api/rooms',{cookie})).status,200);assert.equal((await f.request('/api/auth/google',{cookie:challengeCookie,body:{credential:'token'}})).status,401);
+  await f.restart();assert.equal((await f.request('/api/rooms',{cookie})).status,200);
   await f.login();await f.request('/api/auth/logout',{cookie,body:{}});assert.equal((await f.request('/api/rooms',{cookie})).status,401);
 });
 test('proxy allows only Google bootstrap routes without session and enforces same origin for credential POST',async t=>{
@@ -185,4 +186,12 @@ test('failed mutating requests are never replayed after tunnel changes',async t=
  const headers={Cookie:'__Host-ideas_session='+'a'.repeat(43)};await fetch(base+'/api/rooms',{headers});time=1000;
  const response=await fetch(base+'/api/jobs',{method:'POST',headers:{...headers,Origin:'https://ideas.example','Content-Type':'application/json'},body:'{}'});
  assert.equal(response.status,503);assert.equal(posts,1);assert.equal(reads,1);
+});
+
+test('worker renews the persistent HttpOnly cookie on active use and rejects it after idle expiry',async t=>{
+ let time=100000;const f=await workerFixture(t,(req,res)=>res.end('{}'),{now:()=>time});const cookie=await f.login();
+ assert.equal((await f.request('/api/rooms',{cookie})).headers.get('set-cookie'),null);
+ time+=24*3600000;const refreshed=await f.request('/api/rooms',{cookie});assert.equal(refreshed.status,200);assert.match(refreshed.headers.get('set-cookie'),/Max-Age=2592000/);
+ await f.restart();assert.equal((await f.request('/api/rooms',{cookie})).status,200);
+ time+=31*24*3600000;assert.equal((await f.request('/api/rooms',{cookie})).status,401);
 });
